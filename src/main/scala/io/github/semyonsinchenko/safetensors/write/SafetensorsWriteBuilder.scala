@@ -7,24 +7,21 @@ import org.apache.spark.sql.connector.write.{BatchWrite, LogicalWriteInfo, Write
 import org.apache.spark.sql.types.{ArrayType, DataType, StructType}
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
-/**
- * WriteBuilder for the safetensors DataSource V2.
- *
- * All schema and type validation is performed eagerly here in buildForBatch()
- * before any tasks are launched, so that errors surface at plan time with
- * clear messages (AnalysisException).
- *
- * Accepted input column types (auto-detected per column):
- *   1. Tensor Struct (StructType with data/shape/dtype fields): raw bytes
- *      are written directly.
- *   2. Numeric ArrayType (ArrayType with a numeric element type): the connector
- *      encodes array elements into raw bytes using the target dtype option.
- *      Non-numeric ArrayType (e.g. ArrayType(StringType)) is rejected.
- */
+/** WriteBuilder for the safetensors DataSource V2.
+  *
+  * All schema and type validation is performed eagerly here in buildForBatch() before any tasks are
+  * launched, so that errors surface at plan time with clear messages (AnalysisException).
+  *
+  * Accepted input column types (auto-detected per column):
+  *   1. Tensor Struct (StructType with data/shape/dtype fields): raw bytes are written directly. 2.
+  *      Numeric ArrayType (ArrayType with a numeric element type): the connector encodes array
+  *      elements into raw bytes using the target dtype option. Non-numeric ArrayType (e.g.
+  *      ArrayType(StringType)) is rejected.
+  */
 class SafetensorsWriteBuilder(
-  private val info:    LogicalWriteInfo,
-  private val options: CaseInsensitiveStringMap,
-  private val paths:   Seq[String],
+    private val info: LogicalWriteInfo,
+    private val options: CaseInsensitiveStringMap,
+    private val paths: Seq[String]
 ) extends WriteBuilder {
 
   override def buildForBatch(): BatchWrite = {
@@ -56,7 +53,8 @@ class SafetensorsWriteBuilder(
     if (columnsToWrite.isEmpty) {
       throw Errors.analysisException(
         "No tensor columns found to write. " +
-          "Check the 'columns' option and the DataFrame schema.")
+          "Check the 'columns' option and the DataFrame schema."
+      )
     }
 
     columnsToWrite.foreach { field =>
@@ -69,7 +67,8 @@ class SafetensorsWriteBuilder(
         if (!schema.fieldNames.contains(col)) {
           throw Errors.analysisException(
             s"name_col '$col' does not exist in the DataFrame schema. " +
-              s"Available columns: ${schema.fieldNames.mkString(", ")}")
+              s"Available columns: ${schema.fieldNames.mkString(", ")}"
+          )
         }
       case _ =>
     }
@@ -79,7 +78,8 @@ class SafetensorsWriteBuilder(
     if (hasArrayInput && opts.dtype.isEmpty) {
       throw Errors.analysisException(
         "The 'dtype' option is required when writing numeric array columns. " +
-          "Specify the target dtype (e.g. .option(\"dtype\", \"F32\")).")
+          "Specify the target dtype (e.g. .option(\"dtype\", \"F32\"))."
+      )
     }
   }
 
@@ -99,11 +99,14 @@ class SafetensorsWriteBuilder(
           s"supported numeric type. Only ArrayType with numeric element types " +
           s"(${TensorSchema.numericElementTypes.map(_.simpleString).mkString(", ")}) " +
           s"are accepted as tensor input. " +
-          s"Use arr_to_st() to convert, or pass a Tensor Struct column instead.")
+          s"Use arr_to_st() to convert, or pass a Tensor Struct column instead."
+      )
 
     case other =>
       throw Errors.analysisException(
         s"Column '$name' has unsupported type '${other.simpleString}' for safetensors writing. " +
-          s"Expected a Tensor Struct or a numeric ArrayType.")
+          s"Expected a Tensor Struct or a numeric ArrayType."
+      )
   }
+
 }

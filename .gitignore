@@ -180,3 +180,8 @@ spark-warehouse/
 
 # End of https://www.toptal.com/developers/gitignore/api/java,emacs,spark
 .aider*
+
+# Metals
+*.bloop/
+.bsp
+.metals

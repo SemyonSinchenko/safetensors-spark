@@ -1,25 +1,29 @@
 package io.github.semyonsinchenko.safetensors.write
 
-import io.github.semyonsinchenko.safetensors.manifest.{DatasetManifest, ShardInfo}
-import org.apache.hadoop.fs.Path
-import org.apache.spark.SparkContext
-import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.connector.write.{BatchWrite, DataWriterFactory, PhysicalWriteInfo, WriterCommitMessage}
-import org.apache.spark.sql.types.StructType
+import io.github.semyonsinchenko.safetensors.manifest.{DatasetManifest, ShardInfo, TensorIndexEntry}
 
-import java.io.{OutputStreamWriter, PrintWriter}
+import org.apache.hadoop.fs.{FileSystem, Path}
+import org.apache.spark.sql.{Row, SparkSession}
+import org.apache.spark.sql.connector.write.{
+  BatchWrite,
+  DataWriterFactory,
+  PhysicalWriteInfo,
+  WriterCommitMessage
+}
+import org.apache.spark.sql.types.{ArrayType, IntegerType, StringType, StructField, StructType}
+
 import scala.util.control.NonFatal
 
-/**
- * BatchWrite implementation. Runs on the driver.
- *
- * Coordinates commit/abort and assembles dataset_manifest.json from the
- * per-task WriterCommitMessages returned by each SafetensorsDataWriter.
- */
+/** BatchWrite implementation. Runs on the driver.
+  *
+  * Coordinates commit/abort and assembles dataset_manifest.json from the per-task
+  * WriterCommitMessages returned by each SafetensorsDataWriter. Optionally writes
+  * _tensor_index.parquet when generate_index=true.
+  */
 class SafetensorsBatchWrite(
-  private val schema:   StructType,
-  private val options:  WriteOptions,
-  private val paths:    Seq[String],
+    private val schema: StructType,
+    private val options: WriteOptions,
+    private val paths: Seq[String]
 ) extends BatchWrite {
 
   private val outputPath = paths.headOption
@@ -38,22 +42,36 @@ class SafetensorsBatchWrite(
     val totalBytes   = shards.map(_.bytes).sum
 
     val manifest = DatasetManifest(
-      formatVersion      = "1.0",
+      formatVersion = "1.0",
       safetensorsVersion = "1.0",
-      totalSamples       = totalSamples,
-      totalBytes         = totalBytes,
-      shards             = shards.toSeq,
+      totalSamples = totalSamples,
+      totalBytes = totalBytes,
+      shards = shards.toSeq
     )
 
     writeManifest(manifest)
 
     if (options.generateIndex) {
-      writeTensorIndex(commitMsgs)
+      val entries = commitMsgs.flatMap(_.indexEntries).toSeq
+      writeTensorIndex(entries)
     }
   }
 
   override def abort(messages: Array[WriterCommitMessage]): Unit = {
-    // TODO: clean up partial output files written by tasks
+    // Delete all partial shard files reported by tasks that did commit
+    val commitMsgs = messages.collect { case m: SafetensorsCommitMessage => m }
+    val spark      = SparkSession.active
+    val hadoopConf = spark.sparkContext.hadoopConfiguration
+
+    commitMsgs.flatMap(_.shards).foreach { shard =>
+      try {
+        val shardPath = new Path(outputPath, shard.file)
+        val fs        = FileSystem.get(shardPath.toUri, hadoopConf)
+        fs.delete(shardPath, false)
+      } catch {
+        case NonFatal(_) => // best effort
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -64,24 +82,51 @@ class SafetensorsBatchWrite(
     import com.fasterxml.jackson.databind.ObjectMapper
     import com.fasterxml.jackson.module.scala.DefaultScalaModule
 
-    val spark    = SparkSession.active
+    val spark      = SparkSession.active
     val hadoopConf = spark.sparkContext.hadoopConfiguration
-    val outPath  = new Path(outputPath, "dataset_manifest.json")
-    val fs       = outPath.getFileSystem(hadoopConf)
+    val outPath    = new Path(outputPath, "dataset_manifest.json")
+    val fs         = outPath.getFileSystem(hadoopConf)
 
-    val mapper   = new ObjectMapper().registerModule(DefaultScalaModule)
-    val json     = mapper.writerWithDefaultPrettyPrinter().writeValueAsString(manifest)
+    val mapper = new ObjectMapper().registerModule(DefaultScalaModule)
+    val json   = mapper.writerWithDefaultPrettyPrinter().writeValueAsString(manifest)
 
-    val out = fs.create(outPath, true /* overwrite */)
-    try {
+    val out = fs.create(outPath, true /* overwrite */ )
+    try
       out.write(json.getBytes("UTF-8"))
-    } finally {
+    finally
       out.close()
-    }
   }
 
-  private def writeTensorIndex(messages: Array[SafetensorsCommitMessage]): Unit = {
-    // TODO: collect TensorIndexEntry records from messages and write
-    // _tensor_index.parquet via SparkSession.createDataFrame
+  /** Write _tensor_index.parquet at the output root.
+    *
+    * Schema (per §3.6): tensor_key : StringType file_name : StringType shape :
+    * ArrayType(IntegerType) dtype : StringType
+    */
+  private def writeTensorIndex(entries: Seq[TensorIndexEntry]): Unit = {
+    if (entries.isEmpty) return
+
+    val spark = SparkSession.active
+
+    val indexSchema = StructType(
+      Seq(
+        StructField("tensor_key", StringType, nullable = false),
+        StructField("file_name", StringType, nullable = false),
+        StructField("shape", ArrayType(IntegerType), nullable = false),
+        StructField("dtype", StringType, nullable = false)
+      )
+    )
+
+    val rows = entries.map { e =>
+      Row(e.tensorKey, e.fileName, e.shape, e.dtype)
+    }
+
+    val df = spark.createDataFrame(
+      spark.sparkContext.parallelize(rows),
+      indexSchema
+    )
+
+    val indexPath = new Path(outputPath, "_tensor_index.parquet").toString
+    df.write.mode("overwrite").parquet(indexPath)
   }
+
 }

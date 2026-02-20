@@ -12,20 +12,24 @@ class TensorSchemaSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "reject a struct with wrong field names" in {
-    val wrong = StructType(Seq(
-      StructField("bytes", BinaryType, nullable = false),
-      StructField("shape", ArrayType(IntegerType, false), nullable = false),
-      StructField("dtype", StringType, nullable = false),
-    ))
+    val wrong = StructType(
+      Seq(
+        StructField("bytes", BinaryType, nullable = false),
+        StructField("shape", ArrayType(IntegerType, false), nullable = false),
+        StructField("dtype", StringType, nullable = false)
+      )
+    )
     TensorSchema.isTensorStruct(wrong) shouldBe false
   }
 
   it should "reject a struct with wrong field types" in {
-    val wrong = StructType(Seq(
-      StructField("data",  StringType, nullable = false),
-      StructField("shape", ArrayType(IntegerType, false), nullable = false),
-      StructField("dtype", StringType, nullable = false),
-    ))
+    val wrong = StructType(
+      Seq(
+        StructField("data", StringType, nullable = false),
+        StructField("shape", ArrayType(IntegerType, false), nullable = false),
+        StructField("dtype", StringType, nullable = false)
+      )
+    )
     TensorSchema.isTensorStruct(wrong) shouldBe false
   }
 
@@ -36,8 +40,9 @@ class TensorSchemaSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "reject non-numeric element types" in {
-    TensorSchema.isNumericArrayType(ArrayType(StringType))  shouldBe false
+    TensorSchema.isNumericArrayType(ArrayType(StringType)) shouldBe false
     TensorSchema.isNumericArrayType(ArrayType(BooleanType)) shouldBe false
-    TensorSchema.isNumericArrayType(StringType)             shouldBe false
+    TensorSchema.isNumericArrayType(StringType) shouldBe false
   }
+
 }

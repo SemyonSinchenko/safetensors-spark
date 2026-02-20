@@ -145,8 +145,75 @@ def test_tensor_index_written_when_enabled(spark, float_arrays_df, tmp_path: Pat
 
 
 def test_shard_size_respected(spark, tmp_path: Path):
-    """Shard file sizes must be within 20% of target_shard_size_mb (at least for large data)."""
-    pytest.skip("Shard size test requires large data — skipped in skeleton")
+    """Each shard file must not exceed target_shard_size_mb + 20% tolerance.
+
+    We use the minimum allowed shard size (50 MB) and generate enough data to
+    force at least two shards. Each F32 tensor element is 4 bytes; we write
+    batches of 1000 elements (4 KB each) and enough rows to exceed 50 MB total
+    so at least one shard boundary is crossed.
+
+    The test verifies:
+      1. More than one shard file is written (i.e., rolling actually happened).
+      2. No individual shard file exceeds target_shard_size_mb * 1.20.
+    """
+    import struct
+
+    TARGET_MB   = 50
+    BATCH_SIZE  = 100   # rows per safetensors file
+    ELEM_COUNT  = 13000  # floats per row — 13000 * 4 B = 52 KB/row * 100 = ~5.2 MB/batch
+    # We need > 50 MB of output, so write ~11 batches = 57 MB → forces 2 shards
+    NUM_ROWS    = BATCH_SIZE * 11  # 1100 rows total
+
+    from pyspark.sql import Row
+    from pyspark.sql.types import (
+        ArrayType,
+        BinaryType,
+        IntegerType,
+        StringType,
+        StructField,
+        StructType,
+    )
+
+    tensor_schema = StructType(
+        [
+            StructField("data", BinaryType(), False),
+            StructField("shape", ArrayType(IntegerType(), False), False),
+            StructField("dtype", StringType(), False),
+        ]
+    )
+
+    def make_row(i: int):
+        raw = struct.pack(f"<{ELEM_COUNT}f", *([float(i % 100)] * ELEM_COUNT))
+        return Row(tensor=Row(data=raw, shape=[ELEM_COUNT], dtype="F32"))
+
+    df = spark.createDataFrame(
+        [make_row(i) for i in range(NUM_ROWS)],
+        StructType([StructField("tensor", tensor_schema, False)]),
+    )
+
+    out_dir = str(tmp_path / "sharded_output")
+    (
+        df.write.format("safetensors")
+        .option("batch_size", str(BATCH_SIZE))
+        .option("dtype", "F32")
+        .option("target_shard_size_mb", str(TARGET_MB))
+        .mode("overwrite")
+        .save(out_dir)
+    )
+
+    shard_files = sorted(Path(out_dir).glob("*.safetensors"))
+    assert len(shard_files) > 1, (
+        f"Expected more than one shard file for {NUM_ROWS} rows at {TARGET_MB} MB target, "
+        f"got {len(shard_files)}: {[f.name for f in shard_files]}"
+    )
+
+    max_allowed_bytes = int(TARGET_MB * 1024 * 1024 * 1.20)
+    for shard in shard_files:
+        size = shard.stat().st_size
+        assert size <= max_allowed_bytes, (
+            f"Shard {shard.name} is {size} bytes, exceeds "
+            f"{max_allowed_bytes} ({TARGET_MB} MB + 20%)"
+        )
 
 
 def test_duplicates_strategy_fail(spark, tmp_path: Path):

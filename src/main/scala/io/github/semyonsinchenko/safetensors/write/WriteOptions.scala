@@ -3,33 +3,32 @@ package io.github.semyonsinchenko.safetensors.write
 import io.github.semyonsinchenko.safetensors.core.SafetensorsDtype
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
-/**
- * Parsed and validated write options for the safetensors DataSource V2 writer.
- *
- * All validation is performed at construction time so that errors surface
- * eagerly in WriteBuilder.buildForBatch() before any tasks are launched.
- */
+/** Parsed and validated write options for the safetensors DataSource V2 writer.
+  *
+  * All validation is performed at construction time so that errors surface eagerly in
+  * WriteBuilder.buildForBatch() before any tasks are launched.
+  */
 final case class WriteOptions(
-  /** Columns to serialize (None = all columns). */
-  columns: Option[Seq[String]],
+    /** Columns to serialize (None = all columns). */
+    columns: Option[Seq[String]],
 
-  /** Per-sample shape overrides keyed by column name. */
-  shapes: Map[String, Seq[Int]],
+    /** Per-sample shape overrides keyed by column name. */
+    shapes: Map[String, Seq[Int]],
 
-  /** Target output dtype (applied to all tensors). */
-  dtype: Option[SafetensorsDtype],
+    /** Target output dtype (applied to all tensors). */
+    dtype: Option[SafetensorsDtype],
 
-  /** Naming strategy — exactly one of batchSize or nameCol must be set. */
-  namingStrategy: NamingStrategy,
+    /** Naming strategy — exactly one of batchSize or nameCol must be set. */
+    namingStrategy: NamingStrategy,
 
-  /** Whether to write _tensor_index.parquet at the output root. */
-  generateIndex: Boolean,
+    /** Whether to write _tensor_index.parquet at the output root. */
+    generateIndex: Boolean,
 
-  /** Target shard file size in megabytes (50–1000). */
-  targetShardSizeMb: Int,
+    /** Target shard file size in megabytes (50–1000). */
+    targetShardSizeMb: Int,
 
-  /** How to handle duplicate tensor keys in name_col mode. */
-  duplicatesStrategy: DuplicatesStrategy,
+    /** How to handle duplicate tensor keys in name_col mode. */
+    duplicatesStrategy: DuplicatesStrategy
 )
 
 sealed trait NamingStrategy
@@ -37,8 +36,8 @@ case class BatchSizeStrategy(batchSize: Int) extends NamingStrategy
 case class NameColStrategy(nameCol: String)  extends NamingStrategy
 
 sealed trait DuplicatesStrategy
-case object FailOnDuplicate     extends DuplicatesStrategy
-case object LastWinOnDuplicate  extends DuplicatesStrategy
+case object FailOnDuplicate    extends DuplicatesStrategy
+case object LastWinOnDuplicate extends DuplicatesStrategy
 
 object WriteOptions {
 
@@ -46,10 +45,9 @@ object WriteOptions {
   val MIN_SHARD_SIZE_MB            = 50
   val MAX_SHARD_SIZE_MB            = 1000
 
-  /**
-   * Parse and validate write options from a CaseInsensitiveStringMap.
-   * Throws IllegalArgumentException for invalid combinations.
-   */
+  /** Parse and validate write options from a CaseInsensitiveStringMap. Throws
+    * IllegalArgumentException for invalid combinations.
+    */
   def parse(options: CaseInsensitiveStringMap): WriteOptions = {
     // columns
     val columns = Option(options.get("columns"))
@@ -62,7 +60,8 @@ object WriteOptions {
         import com.fasterxml.jackson.databind.ObjectMapper
         import com.fasterxml.jackson.module.scala.DefaultScalaModule
         val mapper = new ObjectMapper().registerModule(DefaultScalaModule)
-        mapper.readValue(json, classOf[Map[String, Any]])
+        mapper
+          .readValue(json, classOf[Map[String, Any]])
           .map { case (k, v) =>
             k -> v.asInstanceOf[Seq[Any]].map {
               case n: Int    => n
@@ -74,9 +73,7 @@ object WriteOptions {
 
     // dtype
     val dtype: Option[SafetensorsDtype] = Option(options.get("dtype")).map { s =>
-      SafetensorsDtype.fromString(s).fold(
-        err => throw new IllegalArgumentException(err),
-        identity)
+      SafetensorsDtype.fromString(s).fold(err => throw new IllegalArgumentException(err), identity)
     }
 
     // naming strategy (mutually exclusive: batch_size vs name_col)
@@ -92,10 +89,12 @@ object WriteOptions {
       case (None, Some(col)) => NameColStrategy(col)
       case (Some(_), Some(_)) =>
         throw new IllegalArgumentException(
-          "Options 'batch_size' and 'name_col' are mutually exclusive — specify at most one.")
+          "Options 'batch_size' and 'name_col' are mutually exclusive — specify at most one."
+        )
       case (None, None) =>
         throw new IllegalArgumentException(
-          "One of 'batch_size' or 'name_col' must be specified for the safetensors writer.")
+          "One of 'batch_size' or 'name_col' must be specified for the safetensors writer."
+        )
     }
 
     // duplicatesStrategy
@@ -105,7 +104,8 @@ object WriteOptions {
         case "lastwin" => LastWinOnDuplicate
         case other =>
           throw new IllegalArgumentException(
-            s"Unknown duplicatesStrategy '$other'. Valid values: fail, lastWin")
+            s"Unknown duplicatesStrategy '$other'. Valid values: fail, lastWin"
+          )
       }
 
     // target shard size
@@ -122,13 +122,14 @@ object WriteOptions {
     val generateIndex = options.getBoolean("generate_index", false)
 
     WriteOptions(
-      columns            = columns,
-      shapes             = shapes,
-      dtype              = dtype,
-      namingStrategy     = namingStrategy,
-      generateIndex      = generateIndex,
-      targetShardSizeMb  = targetShardSizeMb,
-      duplicatesStrategy = duplicatesStrategy,
+      columns = columns,
+      shapes = shapes,
+      dtype = dtype,
+      namingStrategy = namingStrategy,
+      generateIndex = generateIndex,
+      targetShardSizeMb = targetShardSizeMb,
+      duplicatesStrategy = duplicatesStrategy
     )
   }
+
 }

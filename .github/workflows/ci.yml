@@ -53,6 +53,12 @@ jobs:
             sbt-${{ matrix.spark_version }}-
 
       # -----------------------------------------------------------------------
+      # Formatting check (must pass before tests run)
+      # -----------------------------------------------------------------------
+      - name: Check Scala formatting (scalafmt)
+        run: sbt -DsparkVersion=${{ matrix.spark_version }} scalafmtCheck "Test/scalafmtCheck"
+
+      # -----------------------------------------------------------------------
       # ScalaTest unit tests
       # -----------------------------------------------------------------------
       - name: Run ScalaTest unit tests

@@ -89,14 +89,68 @@ def test_decoded_values_match_numpy(spark, simple_safetensors_file):
         )
 
 
+def _build_safetensors_bytes(tensor_name: str, dtype_str: str, shape: list, raw_bytes: bytes) -> bytes:
+    """
+    Hand-craft a minimal safetensors binary without any Python library dependency.
+
+    Format (format/format.md):
+      - 8 bytes: N (LE uint64) = JSON header byte length
+      - N bytes: UTF-8 JSON header starting with '{'
+      - raw tensor bytes
+    """
+    import json as _json
+
+    data_offsets = [0, len(raw_bytes)]
+    header_obj = {
+        tensor_name: {
+            "dtype": dtype_str,
+            "shape": shape,
+            "data_offsets": data_offsets,
+        }
+    }
+    header_json = _json.dumps(header_obj).encode("utf-8")
+    header_len  = len(header_json)
+
+    import struct as _struct
+
+    prefix = _struct.pack("<Q", header_len)  # 8-byte LE uint64
+    return prefix + header_json + raw_bytes
+
+
 def test_bf16_dtype_preserved(spark, tmp_path: Path):
-    """BF16 tensors must be read with dtype='BF16' and bytes preserved exactly."""
-    from safetensors.numpy import save_file
+    """BF16 tensors must be read with dtype='BF16' and bytes preserved exactly.
 
-    # numpy doesn't have bfloat16; store as uint16 raw bytes
-    # We'll use a known BF16 pattern
-    raw_vals = np.array([0x3F80, 0x4000, 0x4040], dtype=np.uint16)  # 1.0, 2.0, 3.0 in BF16
+    We craft the .safetensors binary manually to avoid requiring torch.bfloat16.
+    The three known BF16 bit patterns represent 1.0, 2.0, and 3.0.
+    """
+    import struct
 
-    # Build a minimal safetensors file manually with dtype=BF16
-    # (safetensors Python lib supports BF16 via torch.bfloat16)
-    pytest.skip("BF16 test requires torch.bfloat16 — skipped in numpy-only environment")
+    # BF16 values: 1.0 = 0x3F80, 2.0 = 0x4000, 3.0 = 0x4040 (LE 16-bit each)
+    bf16_values = [0x3F80, 0x4000, 0x4040]
+    raw_bytes   = struct.pack("<3H", *bf16_values)  # 6 bytes total
+
+    file_path = tmp_path / "bf16_test.safetensors"
+    file_path.write_bytes(
+        _build_safetensors_bytes("embedding", "BF16", [3], raw_bytes)
+    )
+
+    df = (
+        spark.read.format("safetensors")
+        .option("inferSchema", "true")
+        .load(str(file_path))
+    )
+
+    rows = df.collect()
+    assert len(rows) == 1, "One row per file"
+    row = rows[0]
+
+    tensor = row.embedding
+    assert tensor.dtype == "BF16", f"Expected dtype BF16, got {tensor.dtype}"
+    assert tensor.shape == [3], f"Expected shape [3], got {tensor.shape}"
+
+    # Verify raw bytes are preserved exactly
+    actual_bytes = bytes(tensor.data)
+    assert actual_bytes == raw_bytes, (
+        f"BF16 bytes not preserved. "
+        f"Expected {raw_bytes.hex()}, got {actual_bytes.hex()}"
+    )

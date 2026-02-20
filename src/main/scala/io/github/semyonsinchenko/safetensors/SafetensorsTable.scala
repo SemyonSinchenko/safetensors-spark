@@ -11,17 +11,18 @@ import org.apache.spark.sql.util.CaseInsensitiveStringMap
 import java.util
 import scala.jdk.CollectionConverters._
 
-/**
- * Represents a safetensors "table" — a directory (or single file) containing
- * one or more .safetensors shard files.
- *
- * One .safetensors file = one Spark InputPartition (files are not splittable).
- */
+/** Represents a safetensors "table" — a directory (or single file) containing one or more
+  * .safetensors shard files.
+  *
+  * One .safetensors file = one Spark InputPartition (files are not splittable).
+  */
 class SafetensorsTable(
-  private val tableSchema: StructType,
-  private val options:     CaseInsensitiveStringMap,
-  private val paths:       Seq[String],
-) extends Table with SupportsRead with SupportsWrite {
+    private val tableSchema: StructType,
+    private val options: CaseInsensitiveStringMap,
+    private val paths: Seq[String]
+) extends Table
+    with SupportsRead
+    with SupportsWrite {
 
   override def name(): String = s"safetensors(${paths.mkString(",")})"
 
@@ -31,7 +32,7 @@ class SafetensorsTable(
     Set(
       TableCapability.BATCH_READ,
       TableCapability.BATCH_WRITE,
-      TableCapability.TRUNCATE,
+      TableCapability.TRUNCATE
     ).asJava
 
   override def newScanBuilder(options: CaseInsensitiveStringMap): ScanBuilder =
@@ -39,4 +40,5 @@ class SafetensorsTable(
 
   override def newWriteBuilder(info: LogicalWriteInfo): WriteBuilder =
     new SafetensorsWriteBuilder(info, options, paths)
+
 }

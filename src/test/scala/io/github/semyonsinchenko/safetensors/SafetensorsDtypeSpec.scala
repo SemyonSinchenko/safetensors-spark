@@ -23,16 +23,17 @@ class SafetensorsDtypeSpec extends AnyFlatSpec with Matchers {
   it should "reject unknown dtype strings" in {
     SafetensorsDtype.fromString("F128") shouldBe a[Left[_, _]]
     SafetensorsDtype.fromString("INT32") shouldBe a[Left[_, _]]
-    SafetensorsDtype.fromString("")      shouldBe a[Left[_, _]]
+    SafetensorsDtype.fromString("") shouldBe a[Left[_, _]]
   }
 
   "SafetensorsDtype.bytesPerElement" should "return correct byte widths" in {
-    SafetensorsDtype.bytesPerElement(SafetensorsDtype.U8)   shouldBe 1
-    SafetensorsDtype.bytesPerElement(SafetensorsDtype.I8)   shouldBe 1
-    SafetensorsDtype.bytesPerElement(SafetensorsDtype.F16)  shouldBe 2
+    SafetensorsDtype.bytesPerElement(SafetensorsDtype.U8) shouldBe 1
+    SafetensorsDtype.bytesPerElement(SafetensorsDtype.I8) shouldBe 1
+    SafetensorsDtype.bytesPerElement(SafetensorsDtype.F16) shouldBe 2
     SafetensorsDtype.bytesPerElement(SafetensorsDtype.BF16) shouldBe 2
-    SafetensorsDtype.bytesPerElement(SafetensorsDtype.F32)  shouldBe 4
-    SafetensorsDtype.bytesPerElement(SafetensorsDtype.F64)  shouldBe 8
-    SafetensorsDtype.bytesPerElement(SafetensorsDtype.I64)  shouldBe 8
+    SafetensorsDtype.bytesPerElement(SafetensorsDtype.F32) shouldBe 4
+    SafetensorsDtype.bytesPerElement(SafetensorsDtype.F64) shouldBe 8
+    SafetensorsDtype.bytesPerElement(SafetensorsDtype.I64) shouldBe 8
   }
+
 }

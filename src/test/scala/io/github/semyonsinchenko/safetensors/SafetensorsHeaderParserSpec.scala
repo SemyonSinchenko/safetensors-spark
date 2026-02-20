@@ -11,9 +11,9 @@ class SafetensorsHeaderParserSpec extends AnyFlatSpec with Matchers {
 
   /** Build a minimal valid safetensors header buffer for testing. */
   private def buildTestHeader(json: String): ByteBuffer = {
-    val jsonBytes   = json.getBytes(StandardCharsets.UTF_8)
-    val headerSize  = jsonBytes.length.toLong
-    val buf         = ByteBuffer.allocate(8 + jsonBytes.length)
+    val jsonBytes  = json.getBytes(StandardCharsets.UTF_8)
+    val headerSize = jsonBytes.length.toLong
+    val buf        = ByteBuffer.allocate(8 + jsonBytes.length)
     buf.order(ByteOrder.LITTLE_ENDIAN)
     buf.putLong(headerSize)
     buf.put(jsonBytes)
@@ -28,10 +28,10 @@ class SafetensorsHeaderParserSpec extends AnyFlatSpec with Matchers {
 
     header.tensors should have size 1
     val info = header.tensors("weight")
-    info.dtype            shouldBe SafetensorsDtype.F32
-    info.shape            shouldBe Seq(3, 4)
+    info.dtype shouldBe SafetensorsDtype.F32
+    info.shape shouldBe Seq(3, 4)
     info.dataOffsets.begin shouldBe 0L
-    info.dataOffsets.end   shouldBe 48L
+    info.dataOffsets.end shouldBe 48L
     info.dataOffsets.byteSize shouldBe 48L
   }
 
@@ -46,15 +46,15 @@ class SafetensorsHeaderParserSpec extends AnyFlatSpec with Matchers {
     val json =
       """{"__metadata__": {"author": "test"}, "x": {"dtype": "I32", "shape": [2], "data_offsets": [0, 8]}}"""
     val header = SafetensorsHeaderParser.parse(buildTestHeader(json))
-    header.metadata              shouldBe Map("author" -> "test")
-    header.tensors("x").dtype    shouldBe SafetensorsDtype.I32
+    header.metadata shouldBe Map("author" -> "test")
+    header.tensors("x").dtype shouldBe SafetensorsDtype.I32
   }
 
   it should "expose the correct byteBufferOffset" in {
     val json    = """{"a": {"dtype": "U8", "shape": [4], "data_offsets": [0, 4]}}"""
     val jsonLen = json.getBytes(StandardCharsets.UTF_8).length
     val header  = SafetensorsHeaderParser.parse(buildTestHeader(json))
-    header.headerSize       shouldBe jsonLen.toLong
+    header.headerSize shouldBe jsonLen.toLong
     header.byteBufferOffset shouldBe 8L + jsonLen
   }
 
@@ -69,8 +69,9 @@ class SafetensorsHeaderParserSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "parse a scalar (0-rank) tensor with empty shape" in {
-    val json = """{"scalar": {"dtype": "F32", "shape": [], "data_offsets": [0, 4]}}"""
+    val json   = """{"scalar": {"dtype": "F32", "shape": [], "data_offsets": [0, 4]}}"""
     val header = SafetensorsHeaderParser.parse(buildTestHeader(json))
     header.tensors("scalar").shape shouldBe Seq.empty
   }
+
 }
