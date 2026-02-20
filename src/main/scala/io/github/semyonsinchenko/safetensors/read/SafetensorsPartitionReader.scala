@@ -13,7 +13,6 @@ import org.apache.spark.sql.catalyst.expressions.GenericInternalRow
 import org.apache.spark.sql.catalyst.util.GenericArrayData
 import org.apache.spark.sql.connector.read.PartitionReader
 import org.apache.spark.sql.types.StructType
-import org.apache.spark.sql.util.CaseInsensitiveStringMap
 import org.apache.spark.unsafe.types.UTF8String
 
 import java.net.URI
@@ -44,7 +43,7 @@ import java.nio.file.{Paths, StandardOpenOption}
 class SafetensorsPartitionReader(
     private val filePath: String,
     private val schema: StructType,
-    private val options: CaseInsensitiveStringMap,
+    private val options: Map[String, String],
     private val hadoopConf: Configuration,
     private val requiredTensorKeys: Set[String] = Set.empty
 ) extends PartitionReader[InternalRow] {

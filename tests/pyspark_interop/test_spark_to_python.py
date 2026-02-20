@@ -662,5 +662,8 @@ def test_predicate_pushdown_with_index(spark, tmp_path: Path):
      index_keys = index_df.select("tensor_key").distinct().collect()
      assert len(index_keys) == 2, f"Should have 2 distinct tensor keys (tensor_a, tensor_b), got {len(index_keys)}: {[r[0] for r in index_keys]}"
 
+     # Verify tensor names
+     assert {r[0] for r in index_keys} == {"tensor_a", "tensor_b"}
+
 
 

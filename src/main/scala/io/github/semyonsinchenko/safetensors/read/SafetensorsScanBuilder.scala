@@ -10,6 +10,7 @@ import org.apache.spark.sql.connector.read.{
 import org.apache.spark.sql.connector.expressions.filter.Predicate
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
+import org.apache.spark.util.SerializableConfiguration
 
 /** ScanBuilder for the safetensors DataSource V2.
   *
@@ -66,8 +67,12 @@ class SafetensorsScanBuilder(
   // ---------------------------------------------------------------------------
 
   override def build(): Scan = {
-    val hadoopConf = SparkSession.active.sparkContext.hadoopConfiguration
-    new SafetensorsScan(schema, options, paths, pushedFilters, hadoopConf)
+    val hadoopConf = new SerializableConfiguration(
+      SparkSession.active.sparkContext.hadoopConfiguration
+    )
+    // Convert CaseInsensitiveStringMap to serializable Map[String, String]
+    val optionsMap = scala.jdk.CollectionConverters.MapHasAsScala(options).asScala.toMap
+    new SafetensorsScan(schema, optionsMap, paths, pushedFilters, hadoopConf)
   }
 
 }

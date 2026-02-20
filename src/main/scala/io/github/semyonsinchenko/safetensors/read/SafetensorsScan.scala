@@ -5,7 +5,7 @@ import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.spark.sql.connector.expressions.filter.Predicate
 import org.apache.spark.sql.connector.read.{Batch, InputPartition, PartitionReaderFactory, Scan}
 import org.apache.spark.sql.types.StructType
-import org.apache.spark.sql.util.CaseInsensitiveStringMap
+import org.apache.spark.util.SerializableConfiguration
 
 /** Scan implementation for safetensors.
   *
@@ -20,12 +20,15 @@ import org.apache.spark.sql.util.CaseInsensitiveStringMap
   */
 class SafetensorsScan(
     private val schema: StructType,
-    private val options: CaseInsensitiveStringMap,
+    private val options: Map[String, String],
     private val paths: Seq[String],
     private val pushedFilters: Array[Predicate],
-    private val hadoopConf: Configuration
+    private val hadoopConf: SerializableConfiguration
 ) extends Scan
     with Batch {
+
+  // Unwrap once for local driver-side Hadoop FS operations
+  private def conf: Configuration = hadoopConf.value
 
   override def readSchema(): StructType = schema
 
@@ -40,7 +43,7 @@ class SafetensorsScan(
 
     val partitions = paths.flatMap { rawPath =>
       val hadoopPath = new Path(rawPath)
-      val fs         = FileSystem.get(hadoopPath.toUri, hadoopConf)
+      val fs         = FileSystem.get(hadoopPath.toUri, conf)
 
       if (!fs.exists(hadoopPath)) {
         Seq.empty[SafetensorsInputPartition]
@@ -92,7 +95,7 @@ class SafetensorsScan(
       val spark = org.apache.spark.sql.SparkSession.active
       for (rawPath <- paths) {
         val hadoopPath = new Path(rawPath)
-        val fs = FileSystem.get(hadoopPath.toUri, hadoopConf)
+        val fs = FileSystem.get(hadoopPath.toUri, conf)
         if (fs.exists(hadoopPath)) {
           val status = fs.getFileStatus(hadoopPath)
           val rootPath = if (status.isDirectory) hadoopPath else hadoopPath.getParent
