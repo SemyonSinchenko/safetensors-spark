@@ -1,0 +1,182 @@
+# Created by https://www.toptal.com/developers/gitignore/api/java,emacs,spark
+# Edit at https://www.toptal.com/developers/gitignore?templates=java,emacs,spark
+
+### Emacs ###
+# -*- mode: gitignore; -*-
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Org-mode
+.org-id-locations
+*_archive
+
+# flymake-mode
+*_flymake.*
+
+# eshell files
+/eshell/history
+/eshell/lastdir
+
+# elpa packages
+/elpa/
+
+# reftex files
+*.rel
+
+# AUCTeX auto folder
+/auto/
+
+# cask packages
+.cask/
+dist/
+
+# Flycheck
+flycheck_*.el
+
+# server auth directory
+/server/
+
+# projectiles files
+.projectile
+
+# directory configuration
+.dir-locals.el
+
+# network security
+/network-security.data
+
+
+### Java ###
+# Compiled class file
+*.class
+
+# Log file
+*.log
+
+# BlueJ files
+*.ctxt
+
+# Mobile Tools for Java (J2ME)
+.mtj.tmp/
+
+# Package Files #
+*.jar
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+
+# virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
+hs_err_pid*
+replay_pid*
+
+### Spark ###
+*#*#
+*.#*
+*.iml
+*.ipr
+*.iws
+*.pyc
+*.pyo
+*.swp
+.DS_Store
+.cache
+.classpath
+.ensime
+.ensime_cache/
+.ensime_lucene
+.generated-mima*
+.idea/
+.idea_modules/
+.project
+.pydevproject
+.scala_dependencies
+.settings
+/lib/
+R-unit-tests.log
+R/unit-tests.out
+R/cran-check.out
+R/pkg/vignettes/sparkr-vignettes.html
+R/pkg/tests/fulltests/Rplots.pdf
+build/*.jar
+build/apache-maven*
+build/scala*
+build/zinc*
+cache
+checkpoint
+conf/*.cmd
+conf/*.conf
+conf/*.properties
+conf/*.sh
+conf/*.xml
+conf/java-opts
+conf/slaves
+dependency-reduced-pom.xml
+derby.log
+dev/create-release/*final
+dev/create-release/*txt
+dev/pr-deps/
+docs/_site
+docs/api
+sql/docs
+sql/site
+lib_managed/
+lint-r-report.log
+log/
+logs/
+out/
+project/boot/
+project/build/target/
+project/plugins/lib_managed/
+project/plugins/project/build.properties
+project/plugins/src_managed/
+project/plugins/target/
+python/lib/pyspark.zip
+python/deps
+python/test_coverage/coverage_data
+python/test_coverage/htmlcov
+python/pyspark/python
+reports/
+scalastyle-on-compile.generated.xml
+scalastyle-output.xml
+scalastyle.txt
+spark-*-bin-*.tgz
+spark-tests.log
+src_managed/
+streaming-tests.log
+target/
+unit-tests.log
+work/
+docs/.jekyll-metadata
+
+# For Hive
+TempStatsStore/
+metastore/
+metastore_db/
+sql/hive-thriftserver/test_warehouses
+warehouse/
+spark-warehouse/
+
+# For R session data
+.RData
+.RHistory
+.Rhistory
+*.Rproj
+*.Rproj.*
+
+.Rproj.user
+
+# For SBT
+.jvmopts
+
+
+# End of https://www.toptal.com/developers/gitignore/api/java,emacs,spark
+.aider*
