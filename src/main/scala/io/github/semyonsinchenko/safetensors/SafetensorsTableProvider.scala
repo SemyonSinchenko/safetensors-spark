@@ -12,6 +12,7 @@ import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
 import java.util
 import scala.jdk.CollectionConverters._
+import scala.util.control.NonFatal
 
 /** Entry point for the "safetensors" DataSource V2 format.
   *
@@ -62,22 +63,60 @@ class SafetensorsTableProvider extends TableProvider with DataSourceRegister {
       .map(_.split(",").map(_.trim).toSeq)
       .getOrElse(Seq.empty)
 
-  /** Infer schema by reading the header of the first .safetensors file found under the configured
-    * path. Each tensor key becomes one Spark column of type Tensor Struct (see TensorSchema).
+  /** Infer schema by reading _tensor_index.parquet if available (§3.2), otherwise from the
+    * header of the first .safetensors file. Each tensor key becomes one Spark column of type
+    * Tensor Struct (see TensorSchema).
     */
   private def inferSchemaFromFiles(options: CaseInsensitiveStringMap): StructType = {
     val spark = SparkSession.active
     val paths = resolvePaths(options)
     require(paths.nonEmpty, "No path specified for safetensors data source")
 
-    // Find the first .safetensors file under the given path
-    val firstFile = findFirstSafetensorsFile(spark, paths.head)
+    val rootPath = paths.head
+
+    // Check for _tensor_index.parquet first (§3.2)
+    val indexPath = new Path(rootPath, "_tensor_index.parquet")
+    val hadoopConf = spark.sparkContext.hadoopConfiguration
+    val fs = rootPath.split(":") match {
+      case Array(scheme, rest) if scheme.matches("[a-zA-Z]+") =>
+        // URI with scheme (hdfs://, s3a://, etc.)
+        new Path(rootPath).getFileSystem(hadoopConf)
+      case _ =>
+        // Local path
+        new Path(rootPath).getFileSystem(hadoopConf)
+    }
+
+    if (fs.exists(indexPath)) {
+      // Read the index to extract distinct tensor keys
+      try {
+        val indexDf = spark.read.parquet(indexPath.toString)
+        val tensorKeys = indexDf
+          .select("tensor_key")
+          .distinct()
+          .collect()
+          .map(_.getString(0))
+          .sorted
+          .toSeq
+
+        if (tensorKeys.nonEmpty) {
+          val fields: Seq[StructField] = tensorKeys.map { name =>
+            StructField(name, TensorSchema.schema, nullable = false)
+          }
+          return StructType(fields)
+        }
+      } catch {
+        case NonFatal(_) =>
+          // Fall through to file-based inference if index read fails
+      }
+    }
+
+    // Fall back to reading the first .safetensors file header
+    val firstFile = findFirstSafetensorsFile(spark, rootPath)
       .getOrElse(
-        throw Errors.analysisException(s"No .safetensors files found under: ${paths.head}")
+        throw Errors.analysisException(s"No .safetensors files found under: $rootPath")
       )
 
     // Open the file and parse its header
-    val fs = new Path(firstFile).getFileSystem(spark.sparkContext.hadoopConfiguration)
     val header = {
       val in     = fs.open(new Path(firstFile))
       val length = fs.getFileStatus(new Path(firstFile)).getLen

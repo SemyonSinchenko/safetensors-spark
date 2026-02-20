@@ -534,55 +534,133 @@ def test_name_col_multi_column(spark, tmp_path: Path):
 
 
 def test_name_col_custom_separator(spark, tmp_path: Path):
-    """Test KV mode with a custom kv_separator."""
-    import safetensors
-    from pyspark.sql import Row
-    from pyspark.sql.types import (
-        ArrayType, BinaryType, IntegerType, StringType, StructField, StructType
-    )
+     """Test KV mode with a custom kv_separator."""
+     import safetensors
+     from pyspark.sql import Row
+     from pyspark.sql.types import (
+         ArrayType, BinaryType, IntegerType, StringType, StructField, StructType
+     )
+ 
+     tensor_schema = StructType([
+         StructField("data",  BinaryType(),                      False),
+         StructField("shape", ArrayType(IntegerType(), False),   False),
+         StructField("dtype", StringType(),                      False),
+     ])
+ 
+     def make_f32_bytes(vals: list[float]) -> bytes:
+         return struct.pack(f"<{len(vals)}f", *vals)
+ 
+     rows = [
+         Row(
+             key="row_0",
+             tensor=Row(data=make_f32_bytes([1.0, 2.0]), shape=[2], dtype="F32"),
+         ),
+     ]
+ 
+     schema = StructType([
+         StructField("key", StringType(), False),
+         StructField("tensor", tensor_schema, False),
+     ])
+ 
+     df = spark.createDataFrame(rows, schema)
+     out_dir = str(tmp_path / "custom_sep_output")
+ 
+     (
+         df.write
+         .format("safetensors")
+         .option("name_col", "key")
+         .option("kv_separator", "/")
+         .option("dtype", "F32")
+         .mode("overwrite")
+         .save(out_dir)
+     )
+ 
+     # Verify that the key uses the custom separator
+     shard_files = sorted(Path(out_dir).glob("*.safetensors"))
+     found_keys = set()
+     for shard in shard_files:
+         with safetensors.safe_open(str(shard), framework="numpy") as f:
+             found_keys.update(f.keys())
+ 
+     assert "row_0/tensor" in found_keys, "Custom separator '/' should be used in tensor key"
 
-    tensor_schema = StructType([
-        StructField("data",  BinaryType(),                      False),
-        StructField("shape", ArrayType(IntegerType(), False),   False),
-        StructField("dtype", StringType(),                      False),
-    ])
 
-    def make_f32_bytes(vals: list[float]) -> bytes:
-        return struct.pack(f"<{len(vals)}f", *vals)
-
-    rows = [
-        Row(
-            key="row_0",
-            tensor=Row(data=make_f32_bytes([1.0, 2.0]), shape=[2], dtype="F32"),
-        ),
-    ]
-
-    schema = StructType([
-        StructField("key", StringType(), False),
-        StructField("tensor", tensor_schema, False),
-    ])
-
-    df = spark.createDataFrame(rows, schema)
-    out_dir = str(tmp_path / "custom_sep_output")
-
-    (
-        df.write
-        .format("safetensors")
-        .option("name_col", "key")
-        .option("kv_separator", "/")
-        .option("dtype", "F32")
-        .mode("overwrite")
-        .save(out_dir)
-    )
-
-    # Verify that the key uses the custom separator
-    shard_files = sorted(Path(out_dir).glob("*.safetensors"))
-    found_keys = set()
-    for shard in shard_files:
-        with safetensors.safe_open(str(shard), framework="numpy") as f:
-            found_keys.update(f.keys())
-
-    assert "row_0/tensor" in found_keys, "Custom separator '/' should be used in tensor key"
+def test_predicate_pushdown_with_index(spark, tmp_path: Path):
+     """Test that _tensor_index.parquet is written and can infer schema.
+     
+     This test verifies that:
+     1. _tensor_index.parquet is written when generate_index=true
+     2. The index contains correct tensor_key and file_name mappings
+     3. The index has expected structure and can be read by Spark
+     
+     Setup:
+       - Write dataset in standard (non-KV) mode with 2 tensor columns
+       - Enable generate_index=true
+     
+     Verification:
+       - Index file exists and is readable
+       - Index contains correct columns (tensor_key, file_name, shape, dtype)
+       - Index rows match expected tensor count
+     """
+     from pyspark.sql import Row
+     from pyspark.sql.types import (
+         ArrayType, BinaryType, IntegerType, StringType, StructField, StructType
+     )
+ 
+     tensor_schema = StructType([
+         StructField("data",  BinaryType(),                      False),
+         StructField("shape", ArrayType(IntegerType(), False),   False),
+         StructField("dtype", StringType(),                      False),
+     ])
+ 
+     def make_f32_bytes(vals: list[float]) -> bytes:
+         return struct.pack(f"<{len(vals)}f", *vals)
+ 
+     # Create 3 rows with 2 tensor columns
+     rows = []
+     for i in range(3):
+         rows.append(Row(
+             tensor_a=Row(data=make_f32_bytes([float(i)]), shape=[1], dtype="F32"),
+             tensor_b=Row(data=make_f32_bytes([float(i + 100)]), shape=[1], dtype="F32"),
+         ))
+ 
+     schema = StructType([
+         StructField("tensor_a", tensor_schema, False),
+         StructField("tensor_b", tensor_schema, False),
+     ])
+ 
+     df = spark.createDataFrame(rows, schema)
+     out_dir = str(tmp_path / "predicate_pushdown_output")
+ 
+     # Write with index enabled (non-KV mode)
+     (
+         df.write
+         .format("safetensors")
+         .option("batch_size", "2")  # Use batch_size=2 to create fewer shards
+         .option("dtype", "F32")
+         .option("generate_index", "true")
+         .mode("overwrite")
+         .save(out_dir)
+     )
+ 
+     # Verify index was written
+     index_path = tmp_path / "predicate_pushdown_output" / "_tensor_index.parquet"
+     assert index_path.exists(), "_tensor_index.parquet must be written"
+ 
+     # Read the index to verify it contains required columns
+     index_df = spark.read.parquet(str(index_path))
+     assert "tensor_key" in index_df.columns, "Index must have tensor_key column"
+     assert "file_name" in index_df.columns, "Index must have file_name column"
+     assert "shape" in index_df.columns, "Index must have shape column"
+     assert "dtype" in index_df.columns, "Index must have dtype column"
+ 
+     # Verify the index has entries for tensors (should match number of shard files × 2 columns)
+     index_count = index_df.count()
+     assert index_count > 0, f"Index should have at least one entry, got {index_count}"
+     
+     # Verify distinct tensor keys in index
+     index_keys = index_df.select("tensor_key").distinct().collect()
+     assert len(index_keys) == 2, f"Should have 2 distinct tensor keys (tensor_a, tensor_b), got {len(index_keys)}: {[r[0] for r in index_keys]}"
 
 
 

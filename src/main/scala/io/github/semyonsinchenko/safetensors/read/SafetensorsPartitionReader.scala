@@ -1,6 +1,10 @@
 package io.github.semyonsinchenko.safetensors.read
 
-import io.github.semyonsinchenko.safetensors.core.{SafetensorsHeaderParser, TensorSchema}
+import io.github.semyonsinchenko.safetensors.core.{
+  SafetensorsHeader,
+  SafetensorsHeaderParser,
+  TensorSchema
+}
 
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileSystem, Path}
@@ -41,7 +45,8 @@ class SafetensorsPartitionReader(
     private val filePath: String,
     private val schema: StructType,
     private val options: CaseInsensitiveStringMap,
-    private val hadoopConf: Configuration
+    private val hadoopConf: Configuration,
+    private val requiredTensorKeys: Set[String] = Set.empty
 ) extends PartitionReader[InternalRow] {
 
   // Each .safetensors file produces exactly one row.
@@ -57,9 +62,24 @@ class SafetensorsPartitionReader(
   // Tracks which buffer to use
   private var useHeap: Boolean = false
 
+  // Cached parsed header (parsed once in next() when requiredTensorKeys is set, reused in get())
+  private var cachedHeader: Option[SafetensorsHeader] = None
+
   override def next(): Boolean =
     if (!rowEmitted) {
       openFile()
+      // If we have required keys and this file has none of them, skip it
+      if (requiredTensorKeys.nonEmpty) {
+        val buf = if (useHeap) heapBuffer else mappedBuffer
+        buf.rewind()
+        val header = SafetensorsHeaderParser.parse(buf)
+        buf.rewind() // reset for get()
+        cachedHeader = Some(header)
+        if (header.tensors.keySet.intersect(requiredTensorKeys).isEmpty) {
+          rowEmitted = true // mark as done, no row emitted
+          return false
+        }
+      }
       true
     } else {
       false
@@ -137,8 +157,14 @@ class SafetensorsPartitionReader(
   }
 
   private def buildRow(buf: ByteBuffer): InternalRow = {
-    buf.rewind()
-    val header = SafetensorsHeaderParser.parse(buf)
+    val header = cachedHeader match {
+      case Some(h) =>
+        cachedHeader = None // clear cache after use
+        h
+      case None =>
+        buf.rewind()
+        SafetensorsHeaderParser.parse(buf)
+    }
 
     val fields = schema.fields.map { field =>
       val tensorName = field.name
