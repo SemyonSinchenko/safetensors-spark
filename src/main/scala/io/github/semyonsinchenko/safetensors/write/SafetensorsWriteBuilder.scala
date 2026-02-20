@@ -2,19 +2,27 @@ package io.github.semyonsinchenko.safetensors.write
 
 import io.github.semyonsinchenko.safetensors.core.TensorSchema
 import io.github.semyonsinchenko.safetensors.util.Errors
+import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.spark.sql.AnalysisException
-import org.apache.spark.sql.connector.write.{BatchWrite, LogicalWriteInfo, WriteBuilder}
+import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.connector.write.{BatchWrite, LogicalWriteInfo, SupportsTruncate, WriteBuilder}
 import org.apache.spark.sql.types.{ArrayType, DataType, StructType}
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
+
+import scala.util.control.NonFatal
 
 /** WriteBuilder for the safetensors DataSource V2.
   *
   * All schema and type validation is performed eagerly here in buildForBatch() before any tasks are
   * launched, so that errors surface at plan time with clear messages (AnalysisException).
   *
+  * Supports `mode("overwrite")` via the SupportsTruncate interface: when called, truncate() deletes
+  * all existing .safetensors files from the output paths before returning a new builder instance for
+  * buildForBatch().
+  *
   * Accepted input column types (auto-detected per column):
-  *   1. Tensor Struct (StructType with data/shape/dtype fields): raw bytes are written directly. 2.
-  *      Numeric ArrayType (ArrayType with a numeric element type): the connector encodes array
+  *   1. Tensor Struct (StructType with data/shape/dtype fields): raw bytes are written directly.
+  *   2. Numeric ArrayType (ArrayType with a numeric element type): the connector encodes array
   *      elements into raw bytes using the target dtype option. Non-numeric ArrayType (e.g.
   *      ArrayType(StringType)) is rejected.
   */
@@ -22,7 +30,16 @@ class SafetensorsWriteBuilder(
     private val info: LogicalWriteInfo,
     private val options: CaseInsensitiveStringMap,
     private val paths: Seq[String]
-) extends WriteBuilder {
+) extends WriteBuilder
+    with SupportsTruncate {
+
+  override def truncate(): WriteBuilder = {
+    // Called by Spark when mode("overwrite") with a full-table truncate predicate.
+    // Delete all existing .safetensors files from the output paths, then return a new builder
+    // to proceed with the write (buildForBatch will be called next).
+    deleteExistingSafetensorsFiles()
+    this
+  }
 
   override def buildForBatch(): BatchWrite = {
     // 1. Parse and validate write options (throws on invalid option combinations)
@@ -107,6 +124,49 @@ class SafetensorsWriteBuilder(
         s"Column '$name' has unsupported type '${other.simpleString}' for safetensors writing. " +
           s"Expected a Tensor Struct or a numeric ArrayType."
       )
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private helpers — truncate support (mode("overwrite"))
+  // ---------------------------------------------------------------------------
+
+  /** Delete all existing .safetensors files from the output paths.
+    *
+    * Called by truncate() when mode("overwrite") is used. This clears the directory before writing
+    * new data, but preserves the manifest and index files (which will be overwritten by the write).
+    */
+  private def deleteExistingSafetensorsFiles(): Unit = {
+    val hadoopConf = SparkSession.active.sparkContext.hadoopConfiguration
+    paths.foreach { pathStr =>
+      try {
+        val path = new Path(pathStr)
+        val fs   = FileSystem.get(path.toUri, hadoopConf)
+
+        if (fs.exists(path)) {
+          val fileStatus = fs.getFileStatus(path)
+          if (fileStatus.isFile) {
+            // Single file path: delete it if it's a .safetensors file
+            if (path.getName.endsWith(".safetensors")) {
+              fs.delete(path, false)
+            }
+          } else {
+            // Directory: delete only .safetensors files (preserve manifest, index, etc.)
+            val status = fs.listStatus(path)
+            status.foreach { fileStatus =>
+              if (fileStatus.getPath.getName.endsWith(".safetensors")) {
+                fs.delete(fileStatus.getPath, false)
+              }
+            }
+          }
+        }
+      } catch {
+        case NonFatal(e) =>
+          throw new RuntimeException(
+            s"Failed to delete existing .safetensors files from path $pathStr: ${e.getMessage}",
+            e
+          )
+      }
+    }
   }
 
 }

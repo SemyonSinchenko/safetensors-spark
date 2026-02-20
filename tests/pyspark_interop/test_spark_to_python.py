@@ -261,7 +261,7 @@ def test_name_col_basic(spark, tmp_path: Path):
         .format("safetensors")
         .option("name_col", "tensor_key")
         .option("dtype", "F32")
-        .mode("append")
+        .mode("overwrite")
         .save(out_dir)
     )
 
@@ -325,7 +325,7 @@ def test_name_col_data_correctness(spark, tmp_path: Path):
         .format("safetensors")
         .option("name_col", "key")
         .option("dtype", "F32")
-        .mode("append")
+        .mode("overwrite")
         .save(out_dir)
     )
 
@@ -386,7 +386,7 @@ def test_duplicates_strategy_fail(spark, tmp_path: Path):
             .option("name_col", "key")
             .option("dtype", "F32")
             .option("duplicatesStrategy", "fail")
-            .mode("append")
+            .mode("overwrite")
             .save(out_dir)
         )
 
@@ -442,7 +442,7 @@ def test_duplicates_strategy_last_win(spark, tmp_path: Path):
         .option("name_col", "key")
         .option("dtype", "F32")
         .option("duplicatesStrategy", "lastWin")
-        .mode("append")
+        .mode("overwrite")
         .save(out_dir)
     )
 

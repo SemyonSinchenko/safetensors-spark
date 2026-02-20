@@ -16,9 +16,8 @@ import scala.jdk.CollectionConverters._
   *
   * One .safetensors file = one Spark InputPartition (files are not splittable).
   *
-  * Note: `mode("overwrite")` will be handled by the SafetensorsBatchWrite via a separate
-  * cleanup mechanism (deleting existing .safetensors files before writing). TRUNCATE capability
-  * is not advertised since Spark 4's SupportsTruncate interface requires additional integration.
+  * Note: `mode("overwrite")` is supported via `SupportsTruncate` on the `SafetensorsWriteBuilder`.
+  * The TRUNCATE capability flag advertises this to Spark's analyzer.
   */
 class SafetensorsTable(
     private val tableSchema: StructType,
@@ -35,7 +34,8 @@ class SafetensorsTable(
   override def capabilities(): util.Set[TableCapability] =
     Set(
       TableCapability.BATCH_READ,
-      TableCapability.BATCH_WRITE
+      TableCapability.BATCH_WRITE,
+      TableCapability.TRUNCATE
     ).asJava
 
   override def newScanBuilder(options: CaseInsensitiveStringMap): ScanBuilder =
