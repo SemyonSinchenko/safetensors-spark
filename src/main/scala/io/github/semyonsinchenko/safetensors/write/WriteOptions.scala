@@ -28,7 +28,10 @@ final case class WriteOptions(
     targetShardSizeMb: Int,
 
     /** How to handle duplicate tensor keys in name_col mode. */
-    duplicatesStrategy: DuplicatesStrategy
+    duplicatesStrategy: DuplicatesStrategy,
+
+    /** Separator between name_col value and column name in multi-column KV mode. */
+    kvSeparator: String
 )
 
 sealed trait NamingStrategy
@@ -121,6 +124,9 @@ object WriteOptions {
     // generate_index
     val generateIndex = options.getBoolean("generate_index", false)
 
+    // kv_separator (default: "__", any string accepted including empty)
+    val kvSeparator = Option(options.get("kv_separator")).getOrElse("__")
+
     WriteOptions(
       columns = columns,
       shapes = shapes,
@@ -128,7 +134,8 @@ object WriteOptions {
       namingStrategy = namingStrategy,
       generateIndex = generateIndex,
       targetShardSizeMb = targetShardSizeMb,
-      duplicatesStrategy = duplicatesStrategy
+      duplicatesStrategy = duplicatesStrategy,
+      kvSeparator = kvSeparator
     )
   }
 

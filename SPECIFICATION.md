@@ -158,6 +158,7 @@ error.
 | `dtype` | String | — | Target dtype (`F32`, `F16`, `BF16`, etc.). Required when any input column is a numeric `ArrayType`. |
 | `batch_size` | Int | — | **Batch mode:** stack N rows into one tensor per column per shard. Tensor keys = column names. Mutually exclusive with `name_col`. |
 | `name_col` | String | — | **KV mode:** value of this column becomes the tensor key. Mutually exclusive with `batch_size`. |
+| `kv_separator` | String | `"__"` | Separator between `name_col` value and column name in compound tensor key (KV mode). |
 | `duplicatesStrategy` | String | `"fail"` | Duplicate tensor key behaviour in `name_col` mode: `"fail"` or `"lastWin"`. Ignored in batch mode. |
 | `generate_index` | Boolean | `false` | Write `_tensor_index.parquet` at the output root. |
 | `target_shard_size_mb` | Int | `300` | Target shard size in MB. Valid range: 50–1000. |
@@ -173,6 +174,17 @@ column:
    DoubleType, IntegerType, LongType, ShortType, ByteType}`. Connector encodes
    elements to the target `dtype`. Non-numeric element types (e.g.,
    `ArrayType(StringType)`) must produce a clear `AnalysisException`.
+
+#### Multi-Column KV Mode
+
+When `name_col` is specified with multiple non-key tensor columns, each input
+row produces one tensor per non-key column. The tensor key is always
+`{name_col_value}{kv_separator}{column_name}`, even when only one non-key column
+exists. For example, with `name_col="key"` (default `kv_separator="__"`) and
+columns `key`, `weights`, `bias`, a row with `key="model_v1"` emits two tensors:
+`"model_v1__weights"` and `"model_v1__bias"`. The `kv_separator` option can be
+customized to any non-empty string (e.g., `"/"`, `"."`, `":"`) to change the
+compound key format.
 
 ### 3.5 Metadata & Manifest
 

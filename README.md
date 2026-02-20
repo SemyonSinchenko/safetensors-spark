@@ -140,9 +140,11 @@ import json
 
 ### KV-store mode (`name_col`)
 
-Each input row produces one tensor. The value of `name_col` becomes the tensor
-key in the output header (e.g., `user_id_42`). Suited for feature stores where
-individual samples must be retrieved by key.
+Each input row produces one tensor per non-key column. The tensor key is
+constructed as `{name_col_value}{kv_separator}{column_name}`. Suited for feature
+stores where individual samples must be retrieved by key.
+
+**Single tensor column:**
 
 ```python
 # df has columns: user_id (string), embedding (Tensor Struct)
@@ -155,6 +157,23 @@ individual samples must be retrieved by key.
     .mode("overwrite")
     .save("/output/embeddings/")
 )
+# Tensor keys: "user_42__embedding", "user_1__embedding", ...
+```
+
+**Multiple tensor columns:**
+
+```python
+# df has columns: model_id (string), weights (Tensor Struct), bias (Tensor Struct)
+(
+    df.write
+    .format("safetensors")
+    .option("name_col", "model_id")
+    .option("kv_separator", "/")          # customize separator (default: "__")
+    .option("generate_index", "true")
+    .mode("overwrite")
+    .save("/output/models/")
+)
+# Tensor keys: "model_v1/weights", "model_v1/bias", "model_v2/weights", ...
 ```
 
 Handling duplicate keys (default is `"fail"`):
@@ -171,6 +190,7 @@ Handling duplicate keys (default is `"fail"`):
 |--------|------|---------|-------------|
 | `batch_size` | Int | — | **Batch mode.** Stack N rows into one tensor per column. Mutually exclusive with `name_col`. |
 | `name_col` | String | — | **KV mode.** Column whose value becomes the tensor key. Mutually exclusive with `batch_size`. |
+| `kv_separator` | String | `"__"` | Separator between `name_col` value and column name in compound tensor key (KV mode with multiple columns). |
 | `dtype` | String | — | Target dtype for encoding: `F16`, `F32`, `F64`, `BF16`, `U8`, `I8`, `U16`, `I16`, `U32`, `I32`, `U64`, `I64`. Required when input columns are numeric arrays. |
 | `columns` | String | all | Comma-separated list of columns to serialize. Other columns are ignored. |
 | `shapes` | JSON | — | Per-sample shape override, e.g. `'{"image": [3, 224, 224]}'`. In batch mode, `batch_size` is prepended automatically as the leading dimension. |

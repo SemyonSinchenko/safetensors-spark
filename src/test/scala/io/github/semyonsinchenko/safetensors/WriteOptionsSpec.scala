@@ -182,4 +182,23 @@ class WriteOptionsSpec extends AnyFlatSpec with Matchers {
     o.shapes shouldBe Map("image" -> Seq(3, 224, 224), "label" -> Seq(1))
   }
 
+  // ---------------------------------------------------------------------------
+  // kv_separator option
+  // ---------------------------------------------------------------------------
+
+  it should "default kv_separator to '__'" in {
+    val o = WriteOptions.parse(opts("batch_size" -> "1"))
+    o.kvSeparator shouldBe "__"
+  }
+
+  it should "parse a custom kv_separator" in {
+    val o = WriteOptions.parse(opts("batch_size" -> "1", "kv_separator" -> "/"))
+    o.kvSeparator shouldBe "/"
+  }
+
+  it should "accept an empty kv_separator" in {
+    val o = WriteOptions.parse(opts("batch_size" -> "1", "kv_separator" -> ""))
+    o.kvSeparator shouldBe ""
+  }
+
 }

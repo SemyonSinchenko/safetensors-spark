@@ -241,33 +241,39 @@ class SafetensorsDataWriter(
   private def writeKVRow(row: InternalRow): Unit = {
     val NameColStrategy(nameColName) = options.namingStrategy
 
-    // Extract the tensor key from the name_col column
+    // Extract the base key from the name_col column
     val nameColIdx = schema.fieldIndex(nameColName)
-    val tensorKey  = row.getUTF8String(nameColIdx).toString
+    val nameColValue = row.getUTF8String(nameColIdx).toString
 
-    // Build one tensor descriptor and raw bytes from the row
-    val (tensorDescriptor, tensorBytes) = writeKVTensor(row, tensorKey)
+    // Process each non-key tensor column, emitting one tensor per column
+    for ((colName, colIdx, colType) <- columnsToWrite) {
+      // Construct compound tensor key: {name_col_value}{separator}{column_name}
+      val tensorKey = s"$nameColValue${options.kvSeparator}$colName"
 
-    // Handle duplicate detection
-    if (currentShardTensorKeys.contains(tensorKey)) {
-      options.duplicatesStrategy match {
-        case FailOnDuplicate =>
-          throw new IllegalStateException(
-            s"Duplicate tensor key '$tensorKey' in name_col mode with duplicatesStrategy=fail. " +
-              s"Either use duplicatesStrategy=lastWin or ensure unique keys."
-          )
-        case LastWinOnDuplicate =>
-          // Silently overwrite: remove the old one and add the new one
-          kvTensorBuffer --= kvTensorBuffer.filter(_._1.name == tensorKey)
+      // Build tensor descriptor and raw bytes for this column
+      val (tensorDescriptor, tensorBytes) = writeKVTensor(row, tensorKey, colName, colIdx, colType)
+
+      // Handle duplicate detection
+      if (currentShardTensorKeys.contains(tensorKey)) {
+        options.duplicatesStrategy match {
+          case FailOnDuplicate =>
+            throw new IllegalStateException(
+              s"Duplicate tensor key '$tensorKey' in name_col mode with duplicatesStrategy=fail. " +
+                s"Either use duplicatesStrategy=lastWin or ensure unique keys."
+            )
+          case LastWinOnDuplicate =>
+            // Silently overwrite: remove the old one and add the new one
+            kvTensorBuffer --= kvTensorBuffer.filter(_._1.name == tensorKey)
+        }
       }
+
+      currentShardTensorKeys += tensorKey
+      kvTensorBuffer += ((tensorDescriptor, tensorBytes))
+
+      currentShardSamples += 1
     }
 
-    currentShardTensorKeys += tensorKey
-    kvTensorBuffer += ((tensorDescriptor, tensorBytes))
-
-    currentShardSamples += 1
-
-    // Check if we need to seal the shard (estimate: if adding this tensor would exceed size limit)
+    // Check shard size threshold after all columns for this row are processed
     val estimatedBytes = kvTensorBuffer.map(_._2.length.toLong).sum + kvTensorBuffer.length * 200L
     val thresholdBytes = options.targetShardSizeMb.toLong * 1024 * 1024
     if (estimatedBytes >= thresholdBytes) {
@@ -313,52 +319,51 @@ class SafetensorsDataWriter(
     sealCurrentShard()
   }
 
-  /** Extract a single row as a tensor and return (descriptor, rawBytes). */
-  private def writeKVTensor(row: InternalRow, tensorKey: String): (TensorDescriptor, Array[Byte]) = {
-    val NameColStrategy(nameColName) = options.namingStrategy
-
-    val (dtype, rawBytes, shape) = columnsToWrite.head match {
-      case (colName, colIdx, colType) =>
-        val dtype = options.dtype.getOrElse {
-          colType match {
-            case st: StructType if TensorSchema.isTensorStruct(st) =>
-              val struct = row.getStruct(colIdx, 3)
-              SafetensorsDtype.fromStringUnsafe(struct.getUTF8String(2).toString)
-            case _ =>
-              throw new IllegalStateException(
-                s"dtype option is required for numeric array column '$colName' in KV mode"
-              )
-          }
-        }
-
-        val (perSampleShape, bytes) = colType match {
-          case st: StructType if TensorSchema.isTensorStruct(st) =>
-            val struct = row.getStruct(colIdx, 3)
-            val shapeArr = struct.getArray(1)
-            val shape =
-              (0 until shapeArr.numElements()).map(i => shapeArr.getInt(i)).toSeq
-            val data = struct.getBinary(0)
-            (shape, data)
-
-          case at: ArrayType if TensorSchema.isNumericArrayType(at) =>
-            val arr = row.getArray(colIdx)
-            val shape = options.shapes.get(colName) match {
-              case Some(s) => s
-              case None    => Seq(arr.numElements())
-            }
-            val bytes = encodeNumericArray(arr, at.elementType, dtype)
-            (shape, bytes)
-
-          case other =>
-            throw new IllegalStateException(
-              s"Unexpected column type for '$colName': ${other.simpleString}"
-            )
-        }
-
-        (dtype, bytes, perSampleShape)
+  /** Extract a single column from a row as a tensor and return (descriptor, rawBytes). */
+  private def writeKVTensor(
+      row: InternalRow,
+      tensorKey: String,
+      colName: String,
+      colIdx: Int,
+      colType: DataType
+  ): (TensorDescriptor, Array[Byte]) = {
+    val dtype = options.dtype.getOrElse {
+      colType match {
+        case st: StructType if TensorSchema.isTensorStruct(st) =>
+          val struct = row.getStruct(colIdx, 3)
+          SafetensorsDtype.fromStringUnsafe(struct.getUTF8String(2).toString)
+        case _ =>
+          throw new IllegalStateException(
+            s"dtype option is required for numeric array column '$colName' in KV mode"
+          )
+      }
     }
 
-    (TensorDescriptor(tensorKey, dtype, shape, rawBytes.length.toLong), rawBytes)
+    val (perSampleShape, bytes) = colType match {
+      case st: StructType if TensorSchema.isTensorStruct(st) =>
+        val struct = row.getStruct(colIdx, 3)
+        val shapeArr = struct.getArray(1)
+        val shape =
+          (0 until shapeArr.numElements()).map(i => shapeArr.getInt(i)).toSeq
+        val data = struct.getBinary(0)
+        (shape, data)
+
+      case at: ArrayType if TensorSchema.isNumericArrayType(at) =>
+        val arr = row.getArray(colIdx)
+        val shape = options.shapes.get(colName) match {
+          case Some(s) => s
+          case None    => Seq(arr.numElements())
+        }
+        val bytes = encodeNumericArray(arr, at.elementType, dtype)
+        (shape, bytes)
+
+      case other =>
+        throw new IllegalStateException(
+          s"Unexpected column type for '$colName': ${other.simpleString}"
+        )
+    }
+
+    (TensorDescriptor(tensorKey, dtype, perSampleShape, bytes.length.toLong), bytes)
   }
 
   // ---------------------------------------------------------------------------

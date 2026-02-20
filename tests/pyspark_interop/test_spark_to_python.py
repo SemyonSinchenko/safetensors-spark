@@ -274,9 +274,9 @@ def test_name_col_basic(spark, tmp_path: Path):
         with safetensors.safe_open(str(shard), framework="numpy") as f:
             found_keys.update(f.keys())
 
-    assert "row_0" in found_keys, "Tensor key 'row_0' must be in output"
-    assert "row_1" in found_keys, "Tensor key 'row_1' must be in output"
-    assert "row_2" in found_keys, "Tensor key 'row_2' must be in output"
+    assert "row_0__tensor" in found_keys, "Tensor key 'row_0__tensor' must be in output"
+    assert "row_1__tensor" in found_keys, "Tensor key 'row_1__tensor' must be in output"
+    assert "row_2__tensor" in found_keys, "Tensor key 'row_2__tensor' must be in output"
 
 
 def test_name_col_data_correctness(spark, tmp_path: Path):
@@ -297,8 +297,8 @@ def test_name_col_data_correctness(spark, tmp_path: Path):
         return struct.pack(f"<{len(vals)}f", *vals)
 
     expected_values = {
-        "tensor_0": [1.5, 2.5, 3.5],
-        "tensor_1": [4.0, 5.0],
+        "tensor_0__tensor": [1.5, 2.5, 3.5],
+        "tensor_1__tensor": [4.0, 5.0],
     }
 
     rows = [
@@ -454,12 +454,135 @@ def test_duplicates_strategy_last_win(spark, tmp_path: Path):
             for key in f.keys():
                 all_tensors[key] = f.get_tensor(key)
 
-    assert "shared_key" in all_tensors, "shared_key must be in output"
-    assert "unique_key" in all_tensors, "unique_key must be in output"
+    assert "shared_key__tensor" in all_tensors, "shared_key__tensor must be in output"
+    assert "unique_key__tensor" in all_tensors, "unique_key__tensor must be in output"
 
-    # The 'shared_key' should have the values from the last row (99.0, 100.0)
+    # The 'shared_key__tensor' should have the values from the last row (99.0, 100.0)
     np.testing.assert_array_almost_equal(
-        all_tensors["shared_key"],
+        all_tensors["shared_key__tensor"],
         [99.0, 100.0],
-        err_msg="shared_key should contain the last row's values"
+        err_msg="shared_key__tensor should contain the last row's values"
     )
+
+
+def test_name_col_multi_column(spark, tmp_path: Path):
+    """Test KV mode with multiple non-key tensor columns."""
+    import safetensors
+    from pyspark.sql import Row
+    from pyspark.sql.types import (
+        ArrayType, BinaryType, IntegerType, StringType, StructField, StructType
+    )
+
+    tensor_schema = StructType([
+        StructField("data",  BinaryType(),                      False),
+        StructField("shape", ArrayType(IntegerType(), False),   False),
+        StructField("dtype", StringType(),                      False),
+    ])
+
+    def make_f32_bytes(vals: list[float]) -> bytes:
+        return struct.pack(f"<{len(vals)}f", *vals)
+
+    rows = [
+        Row(
+            key="model_0",
+            weights=Row(data=make_f32_bytes([0.1, 0.2, 0.3]), shape=[3], dtype="F32"),
+            bias=Row(data=make_f32_bytes([0.01, 0.02]), shape=[2], dtype="F32"),
+        ),
+        Row(
+            key="model_1",
+            weights=Row(data=make_f32_bytes([0.4, 0.5]), shape=[2], dtype="F32"),
+            bias=Row(data=make_f32_bytes([0.03]), shape=[1], dtype="F32"),
+        ),
+    ]
+
+    schema = StructType([
+        StructField("key", StringType(), False),
+        StructField("weights", tensor_schema, False),
+        StructField("bias", tensor_schema, False),
+    ])
+
+    df = spark.createDataFrame(rows, schema)
+    out_dir = str(tmp_path / "multi_column_output")
+
+    (
+        df.write
+        .format("safetensors")
+        .option("name_col", "key")
+        .option("dtype", "F32")
+        .mode("overwrite")
+        .save(out_dir)
+    )
+
+    # Verify all four tensor keys exist (2 models × 2 columns each)
+    shard_files = sorted(Path(out_dir).glob("*.safetensors"))
+    all_tensors = {}
+    for shard in shard_files:
+        with safetensors.safe_open(str(shard), framework="numpy") as f:
+            for key in f.keys():
+                all_tensors[key] = f.get_tensor(key)
+
+    assert "model_0__weights" in all_tensors
+    assert "model_0__bias" in all_tensors
+    assert "model_1__weights" in all_tensors
+    assert "model_1__bias" in all_tensors
+
+    # Verify data correctness
+    np.testing.assert_array_almost_equal(all_tensors["model_0__weights"], [0.1, 0.2, 0.3])
+    np.testing.assert_array_almost_equal(all_tensors["model_0__bias"], [0.01, 0.02])
+    np.testing.assert_array_almost_equal(all_tensors["model_1__weights"], [0.4, 0.5])
+    np.testing.assert_array_almost_equal(all_tensors["model_1__bias"], [0.03])
+
+
+def test_name_col_custom_separator(spark, tmp_path: Path):
+    """Test KV mode with a custom kv_separator."""
+    import safetensors
+    from pyspark.sql import Row
+    from pyspark.sql.types import (
+        ArrayType, BinaryType, IntegerType, StringType, StructField, StructType
+    )
+
+    tensor_schema = StructType([
+        StructField("data",  BinaryType(),                      False),
+        StructField("shape", ArrayType(IntegerType(), False),   False),
+        StructField("dtype", StringType(),                      False),
+    ])
+
+    def make_f32_bytes(vals: list[float]) -> bytes:
+        return struct.pack(f"<{len(vals)}f", *vals)
+
+    rows = [
+        Row(
+            key="row_0",
+            tensor=Row(data=make_f32_bytes([1.0, 2.0]), shape=[2], dtype="F32"),
+        ),
+    ]
+
+    schema = StructType([
+        StructField("key", StringType(), False),
+        StructField("tensor", tensor_schema, False),
+    ])
+
+    df = spark.createDataFrame(rows, schema)
+    out_dir = str(tmp_path / "custom_sep_output")
+
+    (
+        df.write
+        .format("safetensors")
+        .option("name_col", "key")
+        .option("kv_separator", "/")
+        .option("dtype", "F32")
+        .mode("overwrite")
+        .save(out_dir)
+    )
+
+    # Verify that the key uses the custom separator
+    shard_files = sorted(Path(out_dir).glob("*.safetensors"))
+    found_keys = set()
+    for shard in shard_files:
+        with safetensors.safe_open(str(shard), framework="numpy") as f:
+            found_keys.update(f.keys())
+
+    assert "row_0/tensor" in found_keys, "Custom separator '/' should be used in tensor key"
+
+
+
