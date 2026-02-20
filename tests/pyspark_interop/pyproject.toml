@@ -1,0 +1,27 @@
+[project]
+name = "safetensors-spark-tests"
+version = "0.1.0"
+description = "PySpark integration tests for safetensors-spark"
+requires-python = ">=3.10"
+
+dependencies = [
+    "pyspark>=4.0.0",
+    "numpy>=1.24",
+    "safetensors>=0.4",
+    "mlflow>=2.10",
+    "pytest>=8.0",
+    "pytest-timeout>=2.3",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["."]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+timeout = 300
+log_cli = true
+log_cli_level = "INFO"
+addopts = "-v --tb=short"
+
+[tool.uv]
+dev-dependencies = []

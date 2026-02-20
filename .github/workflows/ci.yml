@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "dev/**"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  test:
+    name: "Spark ${{ matrix.spark_version }} / Java ${{ matrix.java }}"
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - spark_version: "4.0.1"
+            java: "11"
+          - spark_version: "4.0.1"
+            java: "17"
+          - spark_version: "4.1.0"
+            java: "11"
+          - spark_version: "4.1.0"
+            java: "17"
+
+    steps:
+      # -----------------------------------------------------------------------
+      # Checkout & Java
+      # -----------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java ${{ matrix.java }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: ${{ matrix.java }}
+
+      # -----------------------------------------------------------------------
+      # sbt cache
+      # -----------------------------------------------------------------------
+      - name: Cache sbt / Ivy dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.sbt
+            ~/.ivy2/cache
+            ~/.cache/coursier
+          key: sbt-${{ matrix.spark_version }}-java${{ matrix.java }}-${{ hashFiles('build.sbt', 'project/**') }}
+          restore-keys: |
+            sbt-${{ matrix.spark_version }}-java${{ matrix.java }}-
+            sbt-${{ matrix.spark_version }}-
+
+      # -----------------------------------------------------------------------
+      # ScalaTest unit tests
+      # -----------------------------------------------------------------------
+      - name: Run ScalaTest unit tests
+        run: sbt -DsparkVersion=${{ matrix.spark_version }} test
+
+      # -----------------------------------------------------------------------
+      # Build fat JAR for PySpark integration tests
+      # -----------------------------------------------------------------------
+      - name: Assemble fat JAR
+        run: sbt -DsparkVersion=${{ matrix.spark_version }} assembly
+
+      # -----------------------------------------------------------------------
+      # Python / uv setup
+      # -----------------------------------------------------------------------
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # -----------------------------------------------------------------------
+      # PySpark integration tests
+      # -----------------------------------------------------------------------
+      - name: Install PySpark test dependencies
+        run: uv sync --project tests/pyspark_interop
+
+      - name: Run PySpark integration tests
+        env:
+          SAFETENSORS_SPARK_JAR: ${{ steps.find_jar.outputs.jar_path }}
+          SPARK_VERSION: ${{ matrix.spark_version }}
+        run: |
+          JAR=$(ls target/scala-*/safetensors-spark-assembly-*.jar 2>/dev/null || \
+                ls target/scala-*/safetensors-spark_*.jar | head -1)
+          echo "Using JAR: $JAR"
+          SAFETENSORS_SPARK_JAR=$JAR \
+          uv run --project tests/pyspark_interop \
+            pytest tests/pyspark_interop/ -v --tb=short
