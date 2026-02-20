@@ -216,11 +216,250 @@ def test_shard_size_respected(spark, tmp_path: Path):
         )
 
 
+def test_name_col_basic(spark, tmp_path: Path):
+    """Test basic name_col mode: each row becomes one tensor with a unique key."""
+    import safetensors
+    from pyspark.sql import Row
+    from pyspark.sql.types import (
+        ArrayType, BinaryType, IntegerType, StringType, StructField, StructType
+    )
+
+    tensor_schema = StructType([
+        StructField("data",  BinaryType(),                      False),
+        StructField("shape", ArrayType(IntegerType(), False),   False),
+        StructField("dtype", StringType(),                      False),
+    ])
+
+    def make_f32_bytes(vals: list[float]) -> bytes:
+        return struct.pack(f"<{len(vals)}f", *vals)
+
+    rows = [
+        Row(
+            tensor_key="row_0",
+            tensor=Row(data=make_f32_bytes([1.0, 2.0, 3.0, 4.0]), shape=[4], dtype="F32"),
+        ),
+        Row(
+            tensor_key="row_1",
+            tensor=Row(data=make_f32_bytes([5.0, 6.0, 7.0, 8.0]), shape=[4], dtype="F32"),
+        ),
+        Row(
+            tensor_key="row_2",
+            tensor=Row(data=make_f32_bytes([9.0, 10.0]), shape=[2], dtype="F32"),
+        ),
+    ]
+
+    schema = StructType([
+        StructField("tensor_key", StringType(), False),
+        StructField("tensor", tensor_schema, False),
+    ])
+
+    df = spark.createDataFrame(rows, schema)
+    out_dir = str(tmp_path / "name_col_output")
+
+    (
+        df.write
+        .format("safetensors")
+        .option("name_col", "tensor_key")
+        .option("dtype", "F32")
+        .mode("append")
+        .save(out_dir)
+    )
+
+    # Verify shard files contain the expected tensor keys
+    shard_files = sorted(Path(out_dir).glob("*.safetensors"))
+    assert len(shard_files) > 0, "At least one shard file must be written in name_col mode"
+
+    found_keys = set()
+    for shard in shard_files:
+        with safetensors.safe_open(str(shard), framework="numpy") as f:
+            found_keys.update(f.keys())
+
+    assert "row_0" in found_keys, "Tensor key 'row_0' must be in output"
+    assert "row_1" in found_keys, "Tensor key 'row_1' must be in output"
+    assert "row_2" in found_keys, "Tensor key 'row_2' must be in output"
+
+
+def test_name_col_data_correctness(spark, tmp_path: Path):
+    """Test that tensor bytes in name_col mode match the source data."""
+    import safetensors
+    from pyspark.sql import Row
+    from pyspark.sql.types import (
+        ArrayType, BinaryType, IntegerType, StringType, StructField, StructType
+    )
+
+    tensor_schema = StructType([
+        StructField("data",  BinaryType(),                      False),
+        StructField("shape", ArrayType(IntegerType(), False),   False),
+        StructField("dtype", StringType(),                      False),
+    ])
+
+    def make_f32_bytes(vals: list[float]) -> bytes:
+        return struct.pack(f"<{len(vals)}f", *vals)
+
+    expected_values = {
+        "tensor_0": [1.5, 2.5, 3.5],
+        "tensor_1": [4.0, 5.0],
+    }
+
+    rows = [
+        Row(
+            key="tensor_0",
+            tensor=Row(data=make_f32_bytes([1.5, 2.5, 3.5]), shape=[3], dtype="F32"),
+        ),
+        Row(
+            key="tensor_1",
+            tensor=Row(data=make_f32_bytes([4.0, 5.0]), shape=[2], dtype="F32"),
+        ),
+    ]
+
+    schema = StructType([
+        StructField("key", StringType(), False),
+        StructField("tensor", tensor_schema, False),
+    ])
+
+    df = spark.createDataFrame(rows, schema)
+    out_dir = str(tmp_path / "data_correctness_output")
+
+    (
+        df.write
+        .format("safetensors")
+        .option("name_col", "key")
+        .option("dtype", "F32")
+        .mode("append")
+        .save(out_dir)
+    )
+
+    # Verify tensor values
+    shard_files = sorted(Path(out_dir).glob("*.safetensors"))
+    all_tensors = {}
+    for shard in shard_files:
+        with safetensors.safe_open(str(shard), framework="numpy") as f:
+            for key in f.keys():
+                all_tensors[key] = f.get_tensor(key)
+
+    for key, expected_vals in expected_values.items():
+        assert key in all_tensors, f"Tensor key '{key}' not found in output"
+        actual_vals = all_tensors[key].tolist()
+        np.testing.assert_array_almost_equal(actual_vals, expected_vals,
+                                             err_msg=f"Data mismatch for key '{key}'")
+
+
 def test_duplicates_strategy_fail(spark, tmp_path: Path):
     """duplicatesStrategy=fail must raise an exception on duplicate tensor keys."""
-    pytest.skip("Duplicate strategy test — TODO implement with name_col mode")
+    from pyspark.sql import Row
+    from pyspark.sql.types import (
+        ArrayType, BinaryType, IntegerType, StringType, StructField, StructType
+    )
+
+    tensor_schema = StructType([
+        StructField("data",  BinaryType(),                      False),
+        StructField("shape", ArrayType(IntegerType(), False),   False),
+        StructField("dtype", StringType(),                      False),
+    ])
+
+    def make_f32_bytes(vals: list[float]) -> bytes:
+        return struct.pack(f"<{len(vals)}f", *vals)
+
+    rows = [
+        Row(
+            key="same_key",
+            tensor=Row(data=make_f32_bytes([1.0, 2.0]), shape=[2], dtype="F32"),
+        ),
+        Row(
+            key="same_key",  # Duplicate key
+            tensor=Row(data=make_f32_bytes([3.0, 4.0]), shape=[2], dtype="F32"),
+        ),
+    ]
+
+    schema = StructType([
+        StructField("key", StringType(), False),
+        StructField("tensor", tensor_schema, False),
+    ])
+
+    df = spark.createDataFrame(rows, schema).coalesce(1)  # Force single partition for duplicate detection
+    out_dir = str(tmp_path / "duplicates_fail_output")
+
+    with pytest.raises(Exception) as exc_info:
+        (
+            df.write
+            .format("safetensors")
+            .option("name_col", "key")
+            .option("dtype", "F32")
+            .option("duplicatesStrategy", "fail")
+            .mode("append")
+            .save(out_dir)
+        )
+
+    # The exception should mention duplicate keys
+    assert "Duplicate" in str(exc_info.value), (
+        f"Expected exception to mention duplicates, got: {exc_info.value}"
+    )
 
 
 def test_duplicates_strategy_last_win(spark, tmp_path: Path):
     """duplicatesStrategy=lastWin must silently keep the last row's tensor."""
-    pytest.skip("Duplicate strategy test — TODO implement with name_col mode")
+    import safetensors
+    from pyspark.sql import Row
+    from pyspark.sql.types import (
+        ArrayType, BinaryType, IntegerType, StringType, StructField, StructType
+    )
+
+    tensor_schema = StructType([
+        StructField("data",  BinaryType(),                      False),
+        StructField("shape", ArrayType(IntegerType(), False),   False),
+        StructField("dtype", StringType(),                      False),
+    ])
+
+    def make_f32_bytes(vals: list[float]) -> bytes:
+        return struct.pack(f"<{len(vals)}f", *vals)
+
+    rows = [
+        Row(
+            key="shared_key",
+            tensor=Row(data=make_f32_bytes([1.0, 2.0]), shape=[2], dtype="F32"),
+        ),
+        Row(
+            key="shared_key",  # Same key — should overwrite
+            tensor=Row(data=make_f32_bytes([99.0, 100.0]), shape=[2], dtype="F32"),
+        ),
+        Row(
+            key="unique_key",
+            tensor=Row(data=make_f32_bytes([5.0, 6.0]), shape=[2], dtype="F32"),
+        ),
+    ]
+
+    schema = StructType([
+        StructField("key", StringType(), False),
+        StructField("tensor", tensor_schema, False),
+    ])
+
+    df = spark.createDataFrame(rows, schema).coalesce(1)  # Force single partition for duplicate handling
+    out_dir = str(tmp_path / "duplicates_last_win_output")
+
+    (
+        df.write
+        .format("safetensors")
+        .option("name_col", "key")
+        .option("dtype", "F32")
+        .option("duplicatesStrategy", "lastWin")
+        .mode("append")
+        .save(out_dir)
+    )
+
+    # Verify that the last occurrence of 'shared_key' is in the output
+    shard_files = sorted(Path(out_dir).glob("*.safetensors"))
+    all_tensors = {}
+    for shard in shard_files:
+        with safetensors.safe_open(str(shard), framework="numpy") as f:
+            for key in f.keys():
+                all_tensors[key] = f.get_tensor(key)
+
+    assert "shared_key" in all_tensors, "shared_key must be in output"
+    assert "unique_key" in all_tensors, "unique_key must be in output"
+
+    # The 'shared_key' should have the values from the last row (99.0, 100.0)
+    np.testing.assert_array_almost_equal(
+        all_tensors["shared_key"],
+        [99.0, 100.0],
+        err_msg="shared_key should contain the last row's values"
+    )

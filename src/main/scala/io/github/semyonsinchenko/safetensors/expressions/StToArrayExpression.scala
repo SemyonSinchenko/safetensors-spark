@@ -143,7 +143,7 @@ object StToArrayExpression {
       "",
       "",
       "",
-      "misc_funcs"
+      "scala_udf"
     ),
     (children: Seq[Expression]) => {
       require(

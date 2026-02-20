@@ -20,7 +20,7 @@ import java.util.UUID
 
 /** DataWriter for safetensors output. Runs on each executor task.
   *
-  * Output file naming: part-{taskId:05d}-{uuid}-shard-{shardIndex:04d}.safetensors
+  * Output file naming: part-{taskId:05d}-{uuid}.safetensors (per spec §3.8)
   *
   * A new shard file is opened when estimated bytes exceed target_shard_size_mb.
   *
@@ -28,6 +28,10 @@ import java.util.UUID
   * one safetensors file is written with one tensor per schema column. The leading dimension is the
   * batch size; subsequent dimensions come from the shapes option or are inferred from the first
   * row.
+  *
+  * KV mode (name_col): Each row is written as one tensor whose key is the value of the name_col
+  * column. Duplicate keys are handled per the duplicatesStrategy option (fail or lastWin).
+  * One shard file may contain multiple tensors from different rows.
   *
   * Write path memory model (§3.10):
   *   - Tensor bytes from InternalRow (BinaryType) are wrapped with ByteBuffer.wrap() — no extra
@@ -56,13 +60,18 @@ class SafetensorsDataWriter(
   private var currentShardPath: String                                    = _
   private var currentShardBytes: Long                                     = 0L
   private var currentShardSamples: Int                                    = 0
-  private var shardIndex: Int                                             = 0
 
   // Tracks every shard file path opened by this writer for abort cleanup
   private val openedShardPaths = scala.collection.mutable.ArrayBuffer.empty[String]
 
   // Pending rows in the current batch (batch_size mode)
   private val batchBuffer = scala.collection.mutable.ArrayBuffer.empty[InternalRow]
+
+  // Accumulated tensors in current shard (KV mode) — (descriptor, raw bytes) pairs
+  private val kvTensorBuffer = scala.collection.mutable.ArrayBuffer.empty[(TensorDescriptor, Array[Byte])]
+
+  // Tracked tensor keys in current shard (KV mode, for duplicate detection)
+  private val currentShardTensorKeys = scala.collection.mutable.Set.empty[String]
 
   private lazy val hadoopConf =
     SparkSession.active.sparkContext.hadoopConfiguration
@@ -93,10 +102,11 @@ class SafetensorsDataWriter(
     }
 
   override def commit(): WriterCommitMessage = {
-    // Flush any remaining batch rows
     options.namingStrategy match {
       case _: BatchSizeStrategy if batchBuffer.nonEmpty => flushBatch()
-      case _                                            =>
+      case _: NameColStrategy if kvTensorBuffer.nonEmpty =>
+        flushKVShard() // Flushes and seals the shard
+      case _ =>
     }
     closeShard()
     SafetensorsCommitMessage(shards.toSeq, indexEntries.toSeq)
@@ -225,15 +235,130 @@ class SafetensorsDataWriter(
   }
 
   // ---------------------------------------------------------------------------
-  // Private helpers — KV mode (deferred to next iteration)
+  // Private helpers — KV mode
   // ---------------------------------------------------------------------------
 
   private def writeKVRow(row: InternalRow): Unit = {
-    openShardIfNeeded()
-    // KV mode will be implemented in the next iteration alongside
-    // duplicate-strategy handling and name_col support.
+    val NameColStrategy(nameColName) = options.namingStrategy
+
+    // Extract the tensor key from the name_col column
+    val nameColIdx = schema.fieldIndex(nameColName)
+    val tensorKey  = row.getUTF8String(nameColIdx).toString
+
+    // Build one tensor descriptor and raw bytes from the row
+    val (tensorDescriptor, tensorBytes) = writeKVTensor(row, tensorKey)
+
+    // Handle duplicate detection
+    if (currentShardTensorKeys.contains(tensorKey)) {
+      options.duplicatesStrategy match {
+        case FailOnDuplicate =>
+          throw new IllegalStateException(
+            s"Duplicate tensor key '$tensorKey' in name_col mode with duplicatesStrategy=fail. " +
+              s"Either use duplicatesStrategy=lastWin or ensure unique keys."
+          )
+        case LastWinOnDuplicate =>
+          // Silently overwrite: remove the old one and add the new one
+          kvTensorBuffer --= kvTensorBuffer.filter(_._1.name == tensorKey)
+      }
+    }
+
+    currentShardTensorKeys += tensorKey
+    kvTensorBuffer += ((tensorDescriptor, tensorBytes))
+
     currentShardSamples += 1
-    maybeSealShard()
+
+    // Check if we need to seal the shard (estimate: if adding this tensor would exceed size limit)
+    val estimatedBytes = kvTensorBuffer.map(_._2.length.toLong).sum + kvTensorBuffer.length * 200L
+    val thresholdBytes = options.targetShardSizeMb.toLong * 1024 * 1024
+    if (estimatedBytes >= thresholdBytes) {
+      flushKVShard()
+    }
+  }
+
+  /** Flush accumulated KV tensors to a shard file. */
+  private def flushKVShard(): Unit = {
+    if (kvTensorBuffer.isEmpty) return
+
+    openShardIfNeeded()
+
+    // Build one safetensors file with all accumulated tensors
+    val tensors = kvTensorBuffer.toSeq
+    val headerBuf   = SafetensorsHeaderWriter.buildHeader(tensors.map(_._1))
+    val headerBytes = headerBuf.remaining()
+    writeBuffer(headerBuf)
+
+    // Write all tensor data in order
+    tensors.foreach { case (_, bytes) =>
+      currentShardStream.write(bytes)
+    }
+
+    val dataBytes = tensors.map(_._2.length.toLong).sum
+    currentShardBytes += headerBytes.toLong + dataBytes
+
+    // Collect index entries
+    if (options.generateIndex) {
+      val shardFileName = new Path(currentShardPath).getName
+      tensors.foreach { case (desc, _) =>
+        indexEntries += TensorIndexEntry(
+          tensorKey = desc.name,
+          fileName = shardFileName,
+          shape = desc.shape,
+          dtype = desc.dtype.name
+        )
+      }
+    }
+
+    kvTensorBuffer.clear()
+    currentShardTensorKeys.clear()
+    sealCurrentShard()
+  }
+
+  /** Extract a single row as a tensor and return (descriptor, rawBytes). */
+  private def writeKVTensor(row: InternalRow, tensorKey: String): (TensorDescriptor, Array[Byte]) = {
+    val NameColStrategy(nameColName) = options.namingStrategy
+
+    val (dtype, rawBytes, shape) = columnsToWrite.head match {
+      case (colName, colIdx, colType) =>
+        val dtype = options.dtype.getOrElse {
+          colType match {
+            case st: StructType if TensorSchema.isTensorStruct(st) =>
+              val struct = row.getStruct(colIdx, 3)
+              SafetensorsDtype.fromStringUnsafe(struct.getUTF8String(2).toString)
+            case _ =>
+              throw new IllegalStateException(
+                s"dtype option is required for numeric array column '$colName' in KV mode"
+              )
+          }
+        }
+
+        val (perSampleShape, bytes) = colType match {
+          case st: StructType if TensorSchema.isTensorStruct(st) =>
+            val struct = row.getStruct(colIdx, 3)
+            val shapeArr = struct.getArray(1)
+            val shape =
+              (0 until shapeArr.numElements()).map(i => shapeArr.getInt(i)).toSeq
+            val data = struct.getBinary(0)
+            (shape, data)
+
+          case at: ArrayType if TensorSchema.isNumericArrayType(at) =>
+            val arr = row.getArray(colIdx)
+            val shape = options.shapes.get(colName) match {
+              case Some(s) => s
+              case None    => Seq(arr.numElements())
+            }
+            val bytes = encodeNumericArray(arr, at.elementType, dtype)
+            (shape, bytes)
+
+          case other =>
+            throw new IllegalStateException(
+              s"Unexpected column type for '$colName': ${other.simpleString}"
+            )
+        }
+
+        (dtype, bytes, perSampleShape)
+    }
+
+    (TensorDescriptor(tensorKey, dtype, shape, rawBytes.length.toLong), rawBytes)
   }
 
   // ---------------------------------------------------------------------------
@@ -339,7 +464,7 @@ class SafetensorsDataWriter(
 
   private def openShardIfNeeded(): Unit =
     if (currentShardStream == null) {
-      val fileName = f"part-${taskId}%05d-$taskUuid-shard-${shardIndex}%04d.safetensors"
+      val fileName = f"part-${taskId}%05d-$taskUuid.safetensors"
       currentShardPath = new Path(outputPath, fileName).toString
       val fs = new Path(currentShardPath).getFileSystem(hadoopConf)
       currentShardStream = fs.create(new Path(currentShardPath))
@@ -358,7 +483,6 @@ class SafetensorsDataWriter(
   private def sealCurrentShard(): Unit = {
     if (currentShardStream == null) return
     closeShard()
-    shardIndex += 1
   }
 
   private def closeShard(): Unit =
@@ -372,6 +496,9 @@ class SafetensorsDataWriter(
         samplesCount = currentShardSamples,
         bytes = currentShardBytes
       )
+
+      kvTensorBuffer.clear()
+      currentShardTensorKeys.clear()
     }
 
 }
