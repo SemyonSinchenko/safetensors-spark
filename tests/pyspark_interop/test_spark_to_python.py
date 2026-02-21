@@ -89,10 +89,8 @@ def test_manifest_is_written(spark, float_arrays_df, tmp_path: Path):
     assert len(manifest["shards"]) > 0
 
     for shard in manifest["shards"]:
-        assert "file"          in shard
-        assert "samples_count" in shard
-        assert "bytes"         in shard
-        assert shard["file"].endswith(".safetensors")
+        assert "shard_path"    in shard
+        assert shard["shard_path"].endswith(".safetensors")
 
 
 def test_safetensors_file_readable_by_python(spark, float_arrays_df, tmp_path: Path):

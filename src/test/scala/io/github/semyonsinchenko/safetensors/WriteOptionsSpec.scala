@@ -85,9 +85,9 @@ class WriteOptionsSpec extends AnyFlatSpec with Matchers {
   // tail_strategy (batch mode)
   // ---------------------------------------------------------------------------
 
-  it should "default tail_strategy to DropTail" in {
+  it should "default tail_strategy to WriteAsIs" in {
     val o = WriteOptions.parse(opts("batch_size" -> "1"))
-    o.tailStrategy shouldBe DropTail
+    o.tailStrategy shouldBe WriteAsIs
   }
 
   it should "parse tail_strategy=drop" in {

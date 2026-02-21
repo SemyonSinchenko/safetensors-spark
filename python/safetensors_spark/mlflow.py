@@ -91,7 +91,11 @@ def log_dataset(
     source_json = json.dumps(source_dict, sort_keys=True)
     digest = hashlib.md5(source_json.encode()).hexdigest()
 
-    dataset = mlflow.data.Dataset(source=source, name=name, digest=digest)
+    # Use the path as the source (MLflow will treat it as a local path)
+    # Set source_type to our custom type for tracking
+    dataset = mlflow.data.Dataset(source=path, name=name, digest=digest)
+    dataset._source_type = "safetensors"
+    dataset.source_type = "safetensors"
 
     client = mlflow.MlflowClient()
     effective_run_id = run_id or _get_active_run_id()
@@ -121,10 +125,19 @@ class _SafetensorsDatasetSource(_get_dataset_source_base()):
     def __init__(self, uri: str, manifest: dict) -> None:
         self._uri = uri
         self._manifest = manifest
+        self._source_type = "safetensors"
 
     @property
     def uri(self) -> str:
         return self._uri
+
+    @property
+    def source_type(self) -> str:
+        return self._source_type
+
+    def __len__(self) -> int:
+        """Return length of the source URI for MLflow validation."""
+        return len(self._uri)
 
     @staticmethod
     def _get_source_type() -> str:

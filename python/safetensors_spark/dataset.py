@@ -145,7 +145,7 @@ class DistributedSafetensorsDataset:
             shards.append(
                 ShardInfo(
                     shard_path=shard["shard_path"],
-                    num_samples=shard.get("num_samples", 0),
+                    num_samples=shard.get("samples_count", 0),
                     num_tensors=shard.get("num_tensors", 0),
                 )
             )

@@ -38,9 +38,9 @@ final case class WriteOptions(
       *
       * When the number of rows in a partition is not a multiple of batch_size, the final batch will
       * have fewer rows. This option controls what to do with that tail:
-      *   - DropTail: discard the incomplete batch (default).
+      *   - DropTail: discard the incomplete batch.
       *   - PadWithZeros: zero-pad the incomplete batch to reach exactly batch_size rows.
-      *   - WriteAsIs: write the incomplete batch as-is (smaller leading dimension).
+      *   - WriteAsIs: write the incomplete batch as-is (smaller leading dimension, default).
       */
     tailStrategy: TailStrategy
 )
@@ -147,7 +147,7 @@ object WriteOptions {
 
     // tail_strategy (batch_size mode only; ignored in KV mode)
     val tailStrategy: TailStrategy =
-      Option(options.get("tail_strategy")).getOrElse("drop").toLowerCase match {
+      Option(options.get("tail_strategy")).getOrElse("write").toLowerCase match {
         case "drop"  => DropTail
         case "pad"   => PadWithZeros
         case "write" => WriteAsIs

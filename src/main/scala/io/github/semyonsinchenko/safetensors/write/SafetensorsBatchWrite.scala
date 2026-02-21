@@ -1,6 +1,11 @@
 package io.github.semyonsinchenko.safetensors.write
 
-import io.github.semyonsinchenko.safetensors.manifest.{DatasetManifest, ShardInfo, TensorIndexEntry}
+import io.github.semyonsinchenko.safetensors.manifest.{
+  DatasetManifest,
+  ShardInfo,
+  TensorIndexEntry,
+  TensorSchemaInfo
+}
 
 import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.spark.sql.{Row, SparkSession}
@@ -36,17 +41,31 @@ class SafetensorsBatchWrite(
     val commitMsgs = messages.collect { case m: SafetensorsCommitMessage => m }
 
     // Aggregate shard stats from all tasks
-    val shards = commitMsgs.flatMap(_.shards).sortBy(_.file)
+    val shards = commitMsgs.flatMap(_.shards).sortBy(_.shardPath)
 
     val totalSamples = shards.map(_.samplesCount.toLong).sum
     val totalBytes   = shards.map(_.bytes).sum
+
+    // Compute schema from tensor index entries (aggregate by tensor key)
+    val schema = commitMsgs
+      .flatMap(_.indexEntries)
+      .groupBy(_.tensorKey)
+      .map { case (key, entries) =>
+        val first = entries.head
+        key -> TensorSchemaInfo(
+          dtype = first.dtype,
+          shape = first.shape
+        )
+      }
+      .toMap
 
     val manifest = DatasetManifest(
       formatVersion = "1.0",
       safetensorsVersion = "1.0",
       totalSamples = totalSamples,
       totalBytes = totalBytes,
-      shards = shards.toSeq
+      shards = shards.toSeq,
+      schema = schema
     )
 
     writeManifest(manifest)
@@ -65,7 +84,7 @@ class SafetensorsBatchWrite(
 
     commitMsgs.flatMap(_.shards).foreach { shard =>
       try {
-        val shardPath = new Path(outputPath, shard.file)
+        val shardPath = new Path(outputPath, shard.shardPath)
         val fs        = FileSystem.get(shardPath.toUri, hadoopConf)
         fs.delete(shardPath, false)
       } catch {

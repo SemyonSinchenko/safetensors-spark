@@ -322,23 +322,21 @@ class SafetensorsDataWriter(
 
       val totalBytes = headerBytes.toLong + dataBytes
 
-      // Collect index entries for this shard
-      if (options.generateIndex) {
-        tensors.foreach { case (desc, _) =>
-          indexEntries += TensorIndexEntry(
-            tensorKey = desc.name,
-            fileName = fileName,
-            shape = desc.shape,
-            dtype = desc.dtype.name
-          )
-        }
+      // Always collect index entries for manifest schema
+      tensors.foreach { case (desc, _) =>
+        indexEntries += TensorIndexEntry(
+          tensorKey = desc.name,
+          fileName = fileName,
+          shape = desc.shape,
+          dtype = desc.dtype.name
+        )
       }
 
       stream.flush()
       stream.close()
 
       shards += ShardInfo(
-        file = fileName,
+        shardPath = fileName,
         samplesCount = samplesInBatch,
         bytes = totalBytes
       )
