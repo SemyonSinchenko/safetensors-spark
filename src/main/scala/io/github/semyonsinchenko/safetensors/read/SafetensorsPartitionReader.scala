@@ -137,6 +137,14 @@ class SafetensorsPartitionReader(
     val fs         = FileSystem.get(hadoopPath.toUri, hadoopConf)
     val fileLen    = fs.getFileStatus(hadoopPath).getLen
 
+    // Guard: the remote (heap) read path reads the whole file into a byte array.
+    // Array sizes are limited to Int.MaxValue (~2 GB) in the JVM.
+    require(
+      fileLen <= Int.MaxValue,
+      s"Remote file '$filePath' is $fileLen bytes, which exceeds the 2 GB limit for the remote " +
+        s"(heap) read path. Split the file into smaller shards or use a local filesystem path."
+    )
+
     // Read entire file into a heap ByteBuffer. For remote files mmap is not
     // available; the Tensor bytes must be on the heap for this path.
     val bytes = new Array[Byte](fileLen.toInt)

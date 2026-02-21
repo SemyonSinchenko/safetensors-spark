@@ -156,12 +156,13 @@ error.
 | `columns` | String | all columns | Comma-separated list of columns to serialize. |
 | `shapes` | JSON String | — | Per-sample shape override: `'{"col": [d0, d1]}'`. In `batch_size` mode, `batch_size` is prepended automatically. |
 | `dtype` | String | — | Target dtype (`F32`, `F16`, `BF16`, etc.). Required when any input column is a numeric `ArrayType`. |
-| `batch_size` | Int | — | **Batch mode:** stack N rows into one tensor per column per shard. Tensor keys = column names. Mutually exclusive with `name_col`. |
+| `batch_size` | Int | — | **Batch mode:** every N rows produce one output file containing one stacked tensor per column. Tensor keys = column names. Mutually exclusive with `name_col`. |
+| `tail_strategy` | String | `"drop"` | **Batch mode:** controls the tail partition (rows remaining when partition size is not a multiple of `batch_size`). Values: `"drop"` (discard), `"pad"` (zero-pad to `batch_size`), `"write"` (write as-is). |
 | `name_col` | String | — | **KV mode:** value of this column becomes the tensor key. Mutually exclusive with `batch_size`. |
 | `kv_separator` | String | `"__"` | Separator between `name_col` value and column name in compound tensor key (KV mode). |
 | `duplicatesStrategy` | String | `"fail"` | Duplicate tensor key behaviour in `name_col` mode: `"fail"` or `"lastWin"`. Ignored in batch mode. |
 | `generate_index` | Boolean | `false` | Write `_tensor_index.parquet` at the output root. |
-| `target_shard_size_mb` | Int | `300` | Target shard size in MB. Valid range: 50–1000. |
+| `target_shard_size_mb` | Int | `300` | **KV mode only.** Target shard size in MB. Valid range: 50–1000. |
 
 #### Write Input Column Types
 
@@ -247,13 +248,21 @@ seek past it. This is a major performance win when users query only `shape` or
 ### 3.8 Output File Naming
 
 ```
-part-{taskId:05d}-{uuid}.safetensors
+part-{taskId:05d}-{shardIndex:04d}-{uuid}.safetensors
 ```
 
-Example: `part-00003-550e8400-e29b-41d4-a716-446655440000.safetensors`
+Example: `part-00003-0001-550e8400-e29b-41d4-a716-446655440000.safetensors`
 
-The UUID is generated per task at `DataWriter` construction time, ensuring
-uniqueness during speculative execution retries.
+- `taskId` — Spark task ID (zero-padded to 5 digits).
+- `shardIndex` — per-task shard counter (zero-padded to 4 digits), incremented each time a
+  new file is sealed by the same `DataWriter`. Ensures uniqueness when one task produces
+  multiple output files (e.g., KV mode with large data rolling over `target_shard_size_mb`).
+- `uuid` — UUID generated at `DataWriter` construction time, ensuring uniqueness during
+  speculative execution retries.
+
+**Batch mode:** each batch flush produces one file; the shard index increases monotonically
+per task. **KV mode:** a new file is created each time the accumulated shard bytes exceed
+`target_shard_size_mb`; the shard index ensures distinct filenames.
 
 ### 3.9 Catalyst Expressions
 
@@ -335,8 +344,14 @@ or run `sbt assembly` first.
   - `dataset_manifest.json` present and structurally valid.
   - `_tensor_index.parquet` (when `generate_index=true`) has correct schema and
     content.
-  - F16 and BF16 bytes preserved correctly in `data` field.
-  - Shard files respect `target_shard_size_mb` within 20% tolerance.
+  - F16 and BF16 bytes preserved correctly in `data` field (round-trip via
+    `arr_to_st` + `safetensors.safe_open`).
+  - Each output file in batch mode is a valid, standalone safetensors file
+    readable by the Python `safetensors` library.
+  - `tail_strategy=drop` discards the incomplete last batch.
+  - `tail_strategy=pad` zero-pads the incomplete last batch to exactly `batch_size`.
+  - `tail_strategy=write` writes the incomplete last batch as-is.
+  - KV mode shard files respect `target_shard_size_mb` within 20% tolerance.
   - `duplicatesStrategy` behaves correctly in `name_col` mode.
 
 ### 4.2 MLflow Lineage Test (`test_mlflow.py`)

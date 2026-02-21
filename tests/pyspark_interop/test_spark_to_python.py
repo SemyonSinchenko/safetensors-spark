@@ -9,7 +9,9 @@ Assertions:
   - dataset_manifest.json is present and structurally valid.
   - _tensor_index.parquet (if enabled) contains valid routing information.
   - Shapes and dtypes (including F16, BF16) are correctly preserved.
-  - Shard file sizes respect target_shard_size_mb within a 20% tolerance.
+  - Each batch-mode output file is a valid standalone safetensors file.
+  - tail_strategy (drop/pad/write) is correctly applied to the last incomplete batch.
+  - KV mode shard files respect target_shard_size_mb within a 20% tolerance.
   - duplicatesStrategy behaves correctly in name_col mode.
 """
 
@@ -144,58 +146,287 @@ def test_tensor_index_written_when_enabled(spark, float_arrays_df, tmp_path: Pat
     assert "dtype"      in index_df.columns
 
 
-def test_shard_size_respected(spark, tmp_path: Path):
-    """Each shard file must not exceed target_shard_size_mb + 20% tolerance.
+def test_batch_mode_one_file_per_batch(spark, tmp_path: Path):
+    """Each batch produces exactly one valid, standalone safetensors file.
 
-    We use the minimum allowed shard size (50 MB) and generate enough data to
-    force at least two shards. Each F32 tensor element is 4 bytes; we write
-    batches of 1000 elements (4 KB each) and enough rows to exceed 50 MB total
-    so at least one shard boundary is crossed.
-
-    The test verifies:
-      1. More than one shard file is written (i.e., rolling actually happened).
-      2. No individual shard file exceeds target_shard_size_mb * 1.20.
+    Writes 6 rows with batch_size=2 → expects 3 shard files, each readable
+    by the Python safetensors library with the correct stacked tensor shape.
     """
-    import struct
+    import safetensors
 
-    TARGET_MB   = 50
-    BATCH_SIZE  = 100   # rows per safetensors file
-    ELEM_COUNT  = 13000  # floats per row — 13000 * 4 B = 52 KB/row * 100 = ~5.2 MB/batch
-    # We need > 50 MB of output, so write ~11 batches = 57 MB → forces 2 shards
-    NUM_ROWS    = BATCH_SIZE * 11  # 1100 rows total
+    BATCH_SIZE = 2
+    NUM_ROWS   = 6
+    ELEM_COUNT = 4  # floats per sample
 
     from pyspark.sql import Row
     from pyspark.sql.types import (
-        ArrayType,
-        BinaryType,
-        IntegerType,
-        StringType,
-        StructField,
-        StructType,
+        ArrayType, BinaryType, IntegerType, StringType, StructField, StructType,
     )
 
-    tensor_schema = StructType(
-        [
-            StructField("data", BinaryType(), False),
-            StructField("shape", ArrayType(IntegerType(), False), False),
-            StructField("dtype", StringType(), False),
-        ]
-    )
+    tensor_schema = StructType([
+        StructField("data",  BinaryType(),                    False),
+        StructField("shape", ArrayType(IntegerType(), False), False),
+        StructField("dtype", StringType(),                    False),
+    ])
 
-    def make_row(i: int):
-        raw = struct.pack(f"<{ELEM_COUNT}f", *([float(i % 100)] * ELEM_COUNT))
-        return Row(tensor=Row(data=raw, shape=[ELEM_COUNT], dtype="F32"))
+    rows = [
+        Row(tensor=Row(
+            data=struct.pack(f"<{ELEM_COUNT}f", *[float(i)] * ELEM_COUNT),
+            shape=[ELEM_COUNT],
+            dtype="F32",
+        ))
+        for i in range(NUM_ROWS)
+    ]
 
     df = spark.createDataFrame(
-        [make_row(i) for i in range(NUM_ROWS)],
-        StructType([StructField("tensor", tensor_schema, False)]),
-    )
+        rows, StructType([StructField("tensor", tensor_schema, False)])
+    ).coalesce(1)  # single partition so batch boundaries are deterministic
 
-    out_dir = str(tmp_path / "sharded_output")
+    out_dir = str(tmp_path / "batch_files_output")
     (
         df.write.format("safetensors")
         .option("batch_size", str(BATCH_SIZE))
-        .option("dtype", "F32")
+        .option("tail_strategy", "drop")
+        .mode("overwrite")
+        .save(out_dir)
+    )
+
+    shard_files = sorted(Path(out_dir).glob("*.safetensors"))
+    assert len(shard_files) == NUM_ROWS // BATCH_SIZE, (
+        f"Expected {NUM_ROWS // BATCH_SIZE} shard files, got {len(shard_files)}: "
+        f"{[f.name for f in shard_files]}"
+    )
+
+    for shard in shard_files:
+        with safetensors.safe_open(str(shard), framework="numpy") as f:
+            keys = list(f.keys())
+            assert keys == ["tensor"], f"Expected ['tensor'] in {shard.name}, got {keys}"
+            t = f.get_tensor("tensor")
+            assert t.shape == (BATCH_SIZE, ELEM_COUNT), (
+                f"Expected shape ({BATCH_SIZE}, {ELEM_COUNT}), got {t.shape} in {shard.name}"
+            )
+
+
+def test_batch_mode_tail_strategy_drop(spark, tmp_path: Path):
+    """tail_strategy=drop must discard the last incomplete batch."""
+    BATCH_SIZE = 3
+    NUM_ROWS   = 7  # 2 full batches (6 rows) + 1 tail row that should be dropped
+
+    from pyspark.sql import Row
+    from pyspark.sql.types import (
+        ArrayType, BinaryType, IntegerType, StringType, StructField, StructType,
+    )
+
+    tensor_schema = StructType([
+        StructField("data",  BinaryType(),                    False),
+        StructField("shape", ArrayType(IntegerType(), False), False),
+        StructField("dtype", StringType(),                    False),
+    ])
+
+    rows = [
+        Row(tensor=Row(data=struct.pack("<4f", float(i), 0.0, 0.0, 0.0), shape=[4], dtype="F32"))
+        for i in range(NUM_ROWS)
+    ]
+
+    df = spark.createDataFrame(
+        rows, StructType([StructField("tensor", tensor_schema, False)])
+    ).coalesce(1)
+
+    out_dir = str(tmp_path / "tail_drop_output")
+    (
+        df.write.format("safetensors")
+        .option("batch_size", str(BATCH_SIZE))
+        .option("tail_strategy", "drop")
+        .mode("overwrite")
+        .save(out_dir)
+    )
+
+    shard_files = sorted(Path(out_dir).glob("*.safetensors"))
+    full_batches = NUM_ROWS // BATCH_SIZE  # 2
+    assert len(shard_files) == full_batches, (
+        f"With tail_strategy=drop, expected {full_batches} shard files (tail dropped), "
+        f"got {len(shard_files)}"
+    )
+
+
+def test_batch_mode_tail_strategy_write(spark, tmp_path: Path):
+    """tail_strategy=write must write the incomplete last batch as-is."""
+    import safetensors
+
+    BATCH_SIZE = 3
+    NUM_ROWS   = 7  # 2 full batches + 1-row tail
+    ELEM_COUNT = 4
+
+    from pyspark.sql import Row
+    from pyspark.sql.types import (
+        ArrayType, BinaryType, IntegerType, StringType, StructField, StructType,
+    )
+
+    tensor_schema = StructType([
+        StructField("data",  BinaryType(),                    False),
+        StructField("shape", ArrayType(IntegerType(), False), False),
+        StructField("dtype", StringType(),                    False),
+    ])
+
+    rows = [
+        Row(tensor=Row(
+            data=struct.pack(f"<{ELEM_COUNT}f", *[float(i)] * ELEM_COUNT),
+            shape=[ELEM_COUNT],
+            dtype="F32",
+        ))
+        for i in range(NUM_ROWS)
+    ]
+
+    df = spark.createDataFrame(
+        rows, StructType([StructField("tensor", tensor_schema, False)])
+    ).coalesce(1)
+
+    out_dir = str(tmp_path / "tail_write_output")
+    (
+        df.write.format("safetensors")
+        .option("batch_size", str(BATCH_SIZE))
+        .option("tail_strategy", "write")
+        .mode("overwrite")
+        .save(out_dir)
+    )
+
+    shard_files = sorted(Path(out_dir).glob("*.safetensors"))
+    expected_files = (NUM_ROWS + BATCH_SIZE - 1) // BATCH_SIZE  # ceil(7/3) = 3
+    assert len(shard_files) == expected_files, (
+        f"With tail_strategy=write, expected {expected_files} shard files, "
+        f"got {len(shard_files)}"
+    )
+
+    # Last file must be readable and have the tail size as its leading dimension
+    last_shard = max(shard_files, key=lambda p: p.name)
+    with safetensors.safe_open(str(last_shard), framework="numpy") as f:
+        t = f.get_tensor("tensor")
+        tail_size = NUM_ROWS % BATCH_SIZE  # 1
+        assert t.shape[0] == tail_size, (
+            f"Last shard leading dim should be {tail_size} (tail), got {t.shape[0]}"
+        )
+
+
+def test_batch_mode_tail_strategy_pad(spark, tmp_path: Path):
+    """tail_strategy=pad must zero-pad the incomplete last batch to exactly batch_size rows."""
+    import safetensors
+
+    BATCH_SIZE = 3
+    NUM_ROWS   = 7  # 2 full batches + 1-row tail → last file padded to 3 rows
+    ELEM_COUNT = 4
+
+    from pyspark.sql import Row
+    from pyspark.sql.types import (
+        ArrayType, BinaryType, IntegerType, StringType, StructField, StructType,
+    )
+
+    tensor_schema = StructType([
+        StructField("data",  BinaryType(),                    False),
+        StructField("shape", ArrayType(IntegerType(), False), False),
+        StructField("dtype", StringType(),                    False),
+    ])
+
+    rows = [
+        Row(tensor=Row(
+            data=struct.pack(f"<{ELEM_COUNT}f", *[float(i + 1)] * ELEM_COUNT),
+            shape=[ELEM_COUNT],
+            dtype="F32",
+        ))
+        for i in range(NUM_ROWS)
+    ]
+
+    df = spark.createDataFrame(
+        rows, StructType([StructField("tensor", tensor_schema, False)])
+    ).coalesce(1)
+
+    out_dir = str(tmp_path / "tail_pad_output")
+    (
+        df.write.format("safetensors")
+        .option("batch_size", str(BATCH_SIZE))
+        .option("tail_strategy", "pad")
+        .mode("overwrite")
+        .save(out_dir)
+    )
+
+    shard_files = sorted(Path(out_dir).glob("*.safetensors"))
+    expected_files = (NUM_ROWS + BATCH_SIZE - 1) // BATCH_SIZE  # ceil(7/3) = 3
+    assert len(shard_files) == expected_files, (
+        f"With tail_strategy=pad, expected {expected_files} shard files, "
+        f"got {len(shard_files)}"
+    )
+
+    # All files must have the same leading dimension (batch_size)
+    for shard in shard_files:
+        with safetensors.safe_open(str(shard), framework="numpy") as f:
+            t = f.get_tensor("tensor")
+            assert t.shape == (BATCH_SIZE, ELEM_COUNT), (
+                f"All shards including padded tail must have shape "
+                f"({BATCH_SIZE}, {ELEM_COUNT}), got {t.shape} in {shard.name}"
+            )
+
+    # The padded rows in the last file must be zeros
+    last_shard = max(shard_files, key=lambda p: p.name)
+    with safetensors.safe_open(str(last_shard), framework="numpy") as f:
+        t = f.get_tensor("tensor")
+        tail_size = NUM_ROWS % BATCH_SIZE  # 1 real row in last file
+        # Rows beyond tail_size are padding
+        padding = t[tail_size:]
+        assert (padding == 0).all(), (
+            f"Padded rows in last shard must be zeros, got: {padding}"
+        )
+
+
+def test_kv_mode_shard_size_respected(spark, tmp_path: Path):
+    """KV mode: each shard file must not exceed target_shard_size_mb + 20% tolerance.
+
+    We generate enough key-value tensor data to cross the 50 MB threshold, forcing
+    at least two shard files. Verifies:
+      1. More than one shard file is written.
+      2. No individual shard exceeds target_shard_size_mb * 1.20.
+      3. Each shard is a valid standalone safetensors file.
+    """
+    import safetensors
+
+    TARGET_MB  = 50
+    ELEM_COUNT = 13000  # floats per row — 13000 × 4 B = 52 KB/row
+    # 52 KB × 1100 rows ≈ 57 MB → crosses 50 MB threshold, forces ≥2 shards
+    NUM_ROWS   = 1100
+
+    from pyspark.sql import Row
+    from pyspark.sql.types import (
+        ArrayType, BinaryType, IntegerType, StringType, StructField, StructType,
+    )
+
+    tensor_schema = StructType([
+        StructField("data",  BinaryType(),                    False),
+        StructField("shape", ArrayType(IntegerType(), False), False),
+        StructField("dtype", StringType(),                    False),
+    ])
+
+    rows = [
+        Row(
+            key=f"row_{i}",
+            tensor=Row(
+                data=struct.pack(f"<{ELEM_COUNT}f", *([float(i % 100)] * ELEM_COUNT)),
+                shape=[ELEM_COUNT],
+                dtype="F32",
+            ),
+        )
+        for i in range(NUM_ROWS)
+    ]
+
+    df = spark.createDataFrame(
+        rows,
+        StructType([
+            StructField("key",    StringType(),  False),
+            StructField("tensor", tensor_schema, False),
+        ]),
+    ).coalesce(1)
+
+    out_dir = str(tmp_path / "kv_sharded_output")
+    (
+        df.write.format("safetensors")
+        .option("name_col", "key")
         .option("target_shard_size_mb", str(TARGET_MB))
         .mode("overwrite")
         .save(out_dir)
@@ -203,7 +434,7 @@ def test_shard_size_respected(spark, tmp_path: Path):
 
     shard_files = sorted(Path(out_dir).glob("*.safetensors"))
     assert len(shard_files) > 1, (
-        f"Expected more than one shard file for {NUM_ROWS} rows at {TARGET_MB} MB target, "
+        f"Expected more than one KV shard file at {TARGET_MB} MB target, "
         f"got {len(shard_files)}: {[f.name for f in shard_files]}"
     )
 
@@ -211,9 +442,102 @@ def test_shard_size_respected(spark, tmp_path: Path):
     for shard in shard_files:
         size = shard.stat().st_size
         assert size <= max_allowed_bytes, (
-            f"Shard {shard.name} is {size} bytes, exceeds "
+            f"KV shard {shard.name} is {size} bytes, exceeds "
             f"{max_allowed_bytes} ({TARGET_MB} MB + 20%)"
         )
+        # Each shard must be independently readable
+        with safetensors.safe_open(str(shard), framework="numpy") as f:
+            assert len(list(f.keys())) > 0, f"Shard {shard.name} must have at least one tensor"
+
+
+def test_f16_write_round_trip(spark, tmp_path: Path):
+    """F16 tensors written from Spark must be readable by the Python safetensors library.
+
+    Uses arr_to_st() (registered via SafetensorsExtensions) via Spark SQL to create
+    F16 Tensor Structs, writes them, then reads back with safetensors.safe_open and
+    verifies the dtype and shape are preserved.
+    """
+    import safetensors
+
+    from pyspark.sql import Row
+    from pyspark.sql.types import ArrayType, FloatType, StructField, StructType
+
+    rows = [Row(floats=[1.0, 2.0, 3.0, 4.0]), Row(floats=[5.0, 6.0, 7.0, 8.0])]
+    df_raw = spark.createDataFrame(
+        rows, StructType([StructField("floats", ArrayType(FloatType()), False)])
+    ).coalesce(1)
+
+    # Use Spark SQL to invoke arr_to_st (registered via SafetensorsExtensions)
+    df_raw.createOrReplaceTempView("raw_f16")
+    df_tensors = spark.sql(
+        "SELECT arr_to_st(floats, array(4), 'F16') AS tensor FROM raw_f16"
+    ).coalesce(1)
+
+    out_dir = str(tmp_path / "f16_output")
+    (
+        df_tensors.write.format("safetensors")
+        .option("batch_size", "2")
+        .mode("overwrite")
+        .save(out_dir)
+    )
+
+    shard_files = list(Path(out_dir).glob("*.safetensors"))
+    assert len(shard_files) > 0, "At least one F16 shard file must be written"
+
+    for shard in shard_files:
+        with safetensors.safe_open(str(shard), framework="numpy") as f:
+            keys = list(f.keys())
+            assert "tensor" in keys, f"Expected 'tensor' key in {shard.name}"
+            t = f.get_tensor("tensor")
+            assert t.dtype == np.float16, f"Expected float16 tensor, got {t.dtype}"
+            assert t.shape[1] == 4, f"Expected 4 elements per sample, got {t.shape[1]}"
+
+
+def test_bf16_write_round_trip(spark, tmp_path: Path):
+    """BF16 tensors written from Spark must be readable by the Python safetensors library.
+
+    Uses arr_to_st() to create BF16 Tensor Structs, writes them, then reads back
+    with safetensors.safe_open and verifies the dtype is preserved.
+
+    NOTE: BF16 is not in the JSON schema regex — see §1.1.
+    """
+    import safetensors
+
+    from pyspark.sql import Row
+    from pyspark.sql.types import (
+        ArrayType, FloatType, StructField, StructType,
+    )
+
+    rows = [Row(floats=[1.0, 0.5, -1.0, 2.0]), Row(floats=[0.0, 3.0, -0.5, 1.5])]
+    df_raw = spark.createDataFrame(
+        rows, StructType([StructField("floats", ArrayType(FloatType()), False)])
+    ).coalesce(1)
+
+    df_raw.createOrReplaceTempView("raw_bf16")
+    df_tensors = spark.sql(
+        "SELECT arr_to_st(floats, array(4), 'BF16') AS tensor FROM raw_bf16"
+    ).coalesce(1)
+
+    out_dir = str(tmp_path / "bf16_output")
+    (
+        df_tensors.write.format("safetensors")
+        .option("batch_size", "2")
+        .mode("overwrite")
+        .save(out_dir)
+    )
+
+    shard_files = list(Path(out_dir).glob("*.safetensors"))
+    assert len(shard_files) > 0, "At least one BF16 shard file must be written"
+
+    for shard in shard_files:
+        with safetensors.safe_open(str(shard), framework="numpy") as f:
+            keys = list(f.keys())
+            assert "tensor" in keys, f"Expected 'tensor' key in {shard.name}"
+            t = f.get_tensor("tensor")
+            assert t.dtype == np.float32 or str(t.dtype) in ("bfloat16", "float32"), (
+                f"Expected bfloat16-compatible tensor, got {t.dtype}"
+            )
+            assert t.shape[1] == 4, f"Expected 4 elements per sample, got {t.shape[1]}"
 
 
 def test_name_col_basic(spark, tmp_path: Path):

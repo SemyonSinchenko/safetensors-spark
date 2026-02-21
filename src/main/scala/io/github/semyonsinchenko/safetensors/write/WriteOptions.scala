@@ -1,6 +1,7 @@
 package io.github.semyonsinchenko.safetensors.write
 
 import io.github.semyonsinchenko.safetensors.core.SafetensorsDtype
+
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
 /** Parsed and validated write options for the safetensors DataSource V2 writer.
@@ -24,14 +25,24 @@ final case class WriteOptions(
     /** Whether to write _tensor_index.parquet at the output root. */
     generateIndex: Boolean,
 
-    /** Target shard file size in megabytes (50–1000). */
+    /** Target shard file size in megabytes (50–1000). Used in KV mode only. */
     targetShardSizeMb: Int,
 
     /** How to handle duplicate tensor keys in name_col mode. */
     duplicatesStrategy: DuplicatesStrategy,
 
     /** Separator between name_col value and column name in multi-column KV mode. */
-    kvSeparator: String
+    kvSeparator: String,
+
+    /** How to handle the last incomplete batch in batch_size mode.
+      *
+      * When the number of rows in a partition is not a multiple of batch_size, the final batch will
+      * have fewer rows. This option controls what to do with that tail:
+      *   - DropTail: discard the incomplete batch (default).
+      *   - PadWithZeros: zero-pad the incomplete batch to reach exactly batch_size rows.
+      *   - WriteAsIs: write the incomplete batch as-is (smaller leading dimension).
+      */
+    tailStrategy: TailStrategy
 )
 
 sealed trait NamingStrategy
@@ -41,6 +52,12 @@ case class NameColStrategy(nameCol: String)  extends NamingStrategy
 sealed trait DuplicatesStrategy
 case object FailOnDuplicate    extends DuplicatesStrategy
 case object LastWinOnDuplicate extends DuplicatesStrategy
+
+/** Controls how the incomplete tail batch is handled in batch_size mode. */
+sealed trait TailStrategy
+case object DropTail     extends TailStrategy
+case object PadWithZeros extends TailStrategy
+case object WriteAsIs    extends TailStrategy
 
 object WriteOptions {
 
@@ -111,14 +128,15 @@ object WriteOptions {
           )
       }
 
-    // target shard size
+    // target shard size (used in KV mode only)
     val targetShardSizeMb: Int =
       Option(options.get("target_shard_size_mb"))
         .map(_.toInt)
         .getOrElse(DEFAULT_TARGET_SHARD_SIZE_MB)
     require(
       targetShardSizeMb >= MIN_SHARD_SIZE_MB && targetShardSizeMb <= MAX_SHARD_SIZE_MB,
-      s"target_shard_size_mb must be between $MIN_SHARD_SIZE_MB and $MAX_SHARD_SIZE_MB, got: $targetShardSizeMb"
+      s"target_shard_size_mb must be between $MIN_SHARD_SIZE_MB and $MAX_SHARD_SIZE_MB, " +
+        s"got: $targetShardSizeMb"
     )
 
     // generate_index
@@ -126,6 +144,18 @@ object WriteOptions {
 
     // kv_separator (default: "__", any string accepted including empty)
     val kvSeparator = Option(options.get("kv_separator")).getOrElse("__")
+
+    // tail_strategy (batch_size mode only; ignored in KV mode)
+    val tailStrategy: TailStrategy =
+      Option(options.get("tail_strategy")).getOrElse("drop").toLowerCase match {
+        case "drop"  => DropTail
+        case "pad"   => PadWithZeros
+        case "write" => WriteAsIs
+        case other =>
+          throw new IllegalArgumentException(
+            s"Unknown tail_strategy '$other'. Valid values: drop, pad, write"
+          )
+      }
 
     WriteOptions(
       columns = columns,
@@ -135,7 +165,8 @@ object WriteOptions {
       generateIndex = generateIndex,
       targetShardSizeMb = targetShardSizeMb,
       duplicatesStrategy = duplicatesStrategy,
-      kvSeparator = kvSeparator
+      kvSeparator = kvSeparator,
+      tailStrategy = tailStrategy
     )
   }
 

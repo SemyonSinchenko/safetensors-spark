@@ -82,36 +82,65 @@ class WriteOptionsSpec extends AnyFlatSpec with Matchers {
   }
 
   // ---------------------------------------------------------------------------
-  // target_shard_size_mb
+  // tail_strategy (batch mode)
+  // ---------------------------------------------------------------------------
+
+  it should "default tail_strategy to DropTail" in {
+    val o = WriteOptions.parse(opts("batch_size" -> "1"))
+    o.tailStrategy shouldBe DropTail
+  }
+
+  it should "parse tail_strategy=drop" in {
+    val o = WriteOptions.parse(opts("batch_size" -> "1", "tail_strategy" -> "drop"))
+    o.tailStrategy shouldBe DropTail
+  }
+
+  it should "parse tail_strategy=pad" in {
+    val o = WriteOptions.parse(opts("batch_size" -> "1", "tail_strategy" -> "pad"))
+    o.tailStrategy shouldBe PadWithZeros
+  }
+
+  it should "parse tail_strategy=write" in {
+    val o = WriteOptions.parse(opts("batch_size" -> "1", "tail_strategy" -> "write"))
+    o.tailStrategy shouldBe WriteAsIs
+  }
+
+  it should "reject an unknown tail_strategy" in {
+    an[IllegalArgumentException] should be thrownBy
+      WriteOptions.parse(opts("batch_size" -> "1", "tail_strategy" -> "keep"))
+  }
+
+  // ---------------------------------------------------------------------------
+  // target_shard_size_mb (KV mode)
   // ---------------------------------------------------------------------------
 
   it should "use the default shard size when not specified" in {
-    val o = WriteOptions.parse(opts("batch_size" -> "1"))
+    val o = WriteOptions.parse(opts("name_col" -> "key"))
     o.targetShardSizeMb shouldBe WriteOptions.DEFAULT_TARGET_SHARD_SIZE_MB
   }
 
-  it should "accept a shard size within the valid range" in {
-    val o = WriteOptions.parse(opts("batch_size" -> "1", "target_shard_size_mb" -> "100"))
+  it should "accept a shard size within the valid range in KV mode" in {
+    val o = WriteOptions.parse(opts("name_col" -> "key", "target_shard_size_mb" -> "100"))
     o.targetShardSizeMb shouldBe 100
   }
 
   it should "reject a shard size below the minimum" in {
     an[IllegalArgumentException] should be thrownBy
-      WriteOptions.parse(opts("batch_size" -> "1", "target_shard_size_mb" -> "49"))
+      WriteOptions.parse(opts("name_col" -> "key", "target_shard_size_mb" -> "49"))
   }
 
   it should "reject a shard size above the maximum" in {
     an[IllegalArgumentException] should be thrownBy
-      WriteOptions.parse(opts("batch_size" -> "1", "target_shard_size_mb" -> "1001"))
+      WriteOptions.parse(opts("name_col" -> "key", "target_shard_size_mb" -> "1001"))
   }
 
   it should "accept the minimum shard size exactly" in {
-    val o = WriteOptions.parse(opts("batch_size" -> "1", "target_shard_size_mb" -> "50"))
+    val o = WriteOptions.parse(opts("name_col" -> "key", "target_shard_size_mb" -> "50"))
     o.targetShardSizeMb shouldBe 50
   }
 
   it should "accept the maximum shard size exactly" in {
-    val o = WriteOptions.parse(opts("batch_size" -> "1", "target_shard_size_mb" -> "1000"))
+    val o = WriteOptions.parse(opts("name_col" -> "key", "target_shard_size_mb" -> "1000"))
     o.targetShardSizeMb shouldBe 1000
   }
 

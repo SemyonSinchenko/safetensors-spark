@@ -20,7 +20,13 @@ class SafetensorsPartitionReaderFactory(
   override def createReader(partition: InputPartition): PartitionReader[InternalRow] =
     partition match {
       case p: SafetensorsInputPartition =>
-        new SafetensorsPartitionReader(p.filePath, schema, options, hadoopConf.value, p.requiredTensorKeys)
+        new SafetensorsPartitionReader(
+          p.filePath,
+          schema,
+          options,
+          hadoopConf.value,
+          p.requiredTensorKeys
+        )
       case other =>
         throw new IllegalArgumentException(s"Unexpected partition type: ${other.getClass.getName}")
     }

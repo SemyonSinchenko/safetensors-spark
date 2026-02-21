@@ -5,7 +5,12 @@ import io.github.semyonsinchenko.safetensors.util.Errors
 import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.spark.sql.AnalysisException
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.connector.write.{BatchWrite, LogicalWriteInfo, SupportsTruncate, WriteBuilder}
+import org.apache.spark.sql.connector.write.{
+  BatchWrite,
+  LogicalWriteInfo,
+  SupportsTruncate,
+  WriteBuilder
+}
 import org.apache.spark.sql.types.{ArrayType, DataType, StructType}
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
@@ -17,12 +22,12 @@ import scala.util.control.NonFatal
   * launched, so that errors surface at plan time with clear messages (AnalysisException).
   *
   * Supports `mode("overwrite")` via the SupportsTruncate interface: when called, truncate() deletes
-  * all existing .safetensors files from the output paths before returning a new builder instance for
-  * buildForBatch().
+  * all existing .safetensors files from the output paths before returning a new builder instance
+  * for buildForBatch().
   *
   * Accepted input column types (auto-detected per column):
-  *   1. Tensor Struct (StructType with data/shape/dtype fields): raw bytes are written directly.
-  *   2. Numeric ArrayType (ArrayType with a numeric element type): the connector encodes array
+  *   1. Tensor Struct (StructType with data/shape/dtype fields): raw bytes are written directly. 2.
+  *      Numeric ArrayType (ArrayType with a numeric element type): the connector encodes array
   *      elements into raw bytes using the target dtype option. Non-numeric ArrayType (e.g.
   *      ArrayType(StringType)) is rejected.
   */

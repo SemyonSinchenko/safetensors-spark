@@ -63,9 +63,9 @@ class SafetensorsTableProvider extends TableProvider with DataSourceRegister {
       .map(_.split(",").map(_.trim).toSeq)
       .getOrElse(Seq.empty)
 
-  /** Infer schema by reading _tensor_index.parquet if available (§3.2), otherwise from the
-    * header of the first .safetensors file. Each tensor key becomes one Spark column of type
-    * Tensor Struct (see TensorSchema).
+  /** Infer schema by reading _tensor_index.parquet if available (§3.2), otherwise from the header
+    * of the first .safetensors file. Each tensor key becomes one Spark column of type Tensor Struct
+    * (see TensorSchema).
     */
   private def inferSchemaFromFiles(options: CaseInsensitiveStringMap): StructType = {
     val spark = SparkSession.active
@@ -75,7 +75,7 @@ class SafetensorsTableProvider extends TableProvider with DataSourceRegister {
     val rootPath = paths.head
 
     // Check for _tensor_index.parquet first (§3.2)
-    val indexPath = new Path(rootPath, "_tensor_index.parquet")
+    val indexPath  = new Path(rootPath, "_tensor_index.parquet")
     val hadoopConf = spark.sparkContext.hadoopConfiguration
     val fs = rootPath.split(":") match {
       case Array(scheme, rest) if scheme.matches("[a-zA-Z]+") =>
@@ -106,7 +106,7 @@ class SafetensorsTableProvider extends TableProvider with DataSourceRegister {
         }
       } catch {
         case NonFatal(_) =>
-          // Fall through to file-based inference if index read fails
+        // Fall through to file-based inference if index read fails
       }
     }
 

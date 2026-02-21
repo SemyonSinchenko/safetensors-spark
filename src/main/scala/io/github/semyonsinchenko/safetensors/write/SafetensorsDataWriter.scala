@@ -20,20 +20,35 @@ import java.util.UUID
 
 /** DataWriter for safetensors output. Runs on each executor task.
   *
-  * Output file naming: part-{taskId:05d}-{uuid}.safetensors (per spec §3.8)
+  * Output file naming: part-{taskId:05d}-{shardIndex:04d}-{uuid}.safetensors (per spec §3.8). The
+  * shard index is incremented per file produced by this task, ensuring unique filenames even when a
+  * task produces multiple output files.
   *
-  * A new shard file is opened when estimated bytes exceed target_shard_size_mb.
+  * ==Batch mode (batch_size)==
   *
-  * Batch mode (batch_size): Rows are accumulated into a buffer. When the buffer reaches batch_size,
-  * one safetensors file is written with one tensor per schema column. The leading dimension is the
-  * batch size; subsequent dimensions come from the shapes option or are inferred from the first
+  * Rows are accumulated in a buffer. When the buffer reaches batch_size, one complete, self-
+  * contained safetensors file is written and immediately closed. Each output file contains exactly
+  * batch_size stacked rows (one tensor per schema column). The leading tensor dimension is
+  * batch_size; subsequent dimensions come from the shapes option or are inferred from the first
   * row.
   *
-  * KV mode (name_col): Each row is written as one tensor whose key is the value of the name_col
-  * column. Duplicate keys are handled per the duplicatesStrategy option (fail or lastWin).
-  * One shard file may contain multiple tensors from different rows.
+  * The tail of each partition (the remaining rows when partition size is not a multiple of
+  * batch_size) is handled according to the tail_strategy option:
+  *   - drop (default): the incomplete tail batch is discarded.
+  *   - pad: the tail is zero-padded to reach exactly batch_size rows.
+  *   - write: the tail is written as-is (smaller leading dimension).
   *
-  * Write path memory model (§3.10):
+  * Note: each partition writes its batches independently. If the upstream DataFrame has skewed
+  * partition sizes, some partitions will produce more output files than others. Repartition the
+  * DataFrame before writing if balanced shard counts are required.
+  *
+  * ==KV mode (name_col)==
+  *
+  * Each row produces one tensor per non-key column. The tensor key is constructed as
+  * {name_col_value}{kv_separator}{column_name}. Tensors are accumulated in a shard buffer and
+  * flushed to a new file when the estimated byte count exceeds target_shard_size_mb.
+  *
+  * ==Write path memory model (§3.10)==
   *   - Tensor bytes from InternalRow (BinaryType) are wrapped with ByteBuffer.wrap() — no extra
   *     heap copy.
   *   - Numeric array encoding uses ByteBuffer.allocateDirect() per element group.
@@ -49,17 +64,15 @@ class SafetensorsDataWriter(
 
   private val taskUuid = UUID.randomUUID().toString
 
+  // Per-task shard counter — incremented each time a new shard file is sealed.
+  // Incorporated into the filename to prevent collisions when a task produces multiple files.
+  private var shardIndex: Int = 0
+
   // Accumulated shard info for the commit message
   private val shards = scala.collection.mutable.ArrayBuffer.empty[ShardInfo]
 
   // Tensor index entries for the optional _tensor_index.parquet
   private val indexEntries = scala.collection.mutable.ArrayBuffer.empty[TensorIndexEntry]
-
-  // Current shard state
-  private var currentShardStream: org.apache.hadoop.fs.FSDataOutputStream = _
-  private var currentShardPath: String                                    = _
-  private var currentShardBytes: Long                                     = 0L
-  private var currentShardSamples: Int                                    = 0
 
   // Tracks every shard file path opened by this writer for abort cleanup
   private val openedShardPaths = scala.collection.mutable.ArrayBuffer.empty[String]
@@ -67,11 +80,16 @@ class SafetensorsDataWriter(
   // Pending rows in the current batch (batch_size mode)
   private val batchBuffer = scala.collection.mutable.ArrayBuffer.empty[InternalRow]
 
-  // Accumulated tensors in current shard (KV mode) — (descriptor, raw bytes) pairs
-  private val kvTensorBuffer = scala.collection.mutable.ArrayBuffer.empty[(TensorDescriptor, Array[Byte])]
+  // Accumulated tensors in current KV shard — (descriptor, raw bytes) pairs
+  private val kvTensorBuffer =
+    scala.collection.mutable.ArrayBuffer.empty[(TensorDescriptor, Array[Byte])]
 
-  // Tracked tensor keys in current shard (KV mode, for duplicate detection)
+  // Tracked tensor keys in current KV shard (for duplicate detection)
   private val currentShardTensorKeys = scala.collection.mutable.Set.empty[String]
+
+  // KV shard size tracking
+  private var kvShardBytes: Long  = 0L
+  private var kvShardSamples: Int = 0
 
   private lazy val hadoopConf =
     SparkSession.active.sparkContext.hadoopConfiguration
@@ -103,18 +121,19 @@ class SafetensorsDataWriter(
 
   override def commit(): WriterCommitMessage = {
     options.namingStrategy match {
-      case _: BatchSizeStrategy if batchBuffer.nonEmpty => flushBatch()
-      case _: NameColStrategy if kvTensorBuffer.nonEmpty =>
-        flushKVShard() // Flushes and seals the shard
-      case _ =>
+      case bs: BatchSizeStrategy =>
+        handleTailBatch(bs.batchSize)
+      case _: NameColStrategy =>
+        if (kvTensorBuffer.nonEmpty) {
+          flushKVShard()
+        }
     }
-    closeShard()
     SafetensorsCommitMessage(shards.toSeq, indexEntries.toSeq)
   }
 
   override def abort(): Unit = {
     batchBuffer.clear()
-    closeShard()
+    kvTensorBuffer.clear()
     // Delete all partial shard files written by this task
     openedShardPaths.foreach { p =>
       try {
@@ -127,23 +146,26 @@ class SafetensorsDataWriter(
     }
   }
 
-  override def close(): Unit = closeShard()
+  override def close(): Unit = () // all streams are closed eagerly after each shard
 
   // ---------------------------------------------------------------------------
   // Private helpers — batch mode
   // ---------------------------------------------------------------------------
 
+  /** Flush the current batchBuffer as one complete, self-contained safetensors file.
+    *
+    * Each call to flushBatch() opens a new shard file, writes a valid safetensors binary (8-byte
+    * header-length prefix + JSON header + tensor data), and closes the stream immediately. The file
+    * is therefore always a valid, standalone safetensors file.
+    */
   private def flushBatch(): Unit = {
     if (batchBuffer.isEmpty) return
 
     val batchSize = batchBuffer.size
-    openShardIfNeeded()
 
-    // Build tensor descriptors (name, dtype, shape, byteLength) and raw byte arrays
     val tensors: Seq[(TensorDescriptor, Array[Byte])] = columnsToWrite.map {
       case (colName, colIdx, colType) =>
         val dtype = options.dtype.getOrElse {
-          // For TensorStruct input, read dtype from the first row
           colType match {
             case st: StructType if TensorSchema.isTensorStruct(st) =>
               val firstRow = batchBuffer.head
@@ -158,12 +180,10 @@ class SafetensorsDataWriter(
 
         val (perSampleShape, rawBytes) = colType match {
           case st: StructType if TensorSchema.isTensorStruct(st) =>
-            // Tensor Struct input: concatenate raw data bytes from each row
             val byteArrays = batchBuffer.map { row =>
               row.getStruct(colIdx, 3).getBinary(0)
             }.toArray
 
-            // Shape: infer per-sample shape from first row's shape field
             val firstStruct = batchBuffer.head.getStruct(colIdx, 3)
             val shapeArr    = firstStruct.getArray(1)
             val perSample   = (0 until shapeArr.numElements()).map(i => shapeArr.getInt(i))
@@ -172,13 +192,11 @@ class SafetensorsDataWriter(
             (perSample, combined)
 
           case at: ArrayType if TensorSchema.isNumericArrayType(at) =>
-            // Numeric array input: encode all rows to target dtype
             val byteArrays = batchBuffer.map { row =>
               val arr = row.getArray(colIdx)
               encodeNumericArray(arr, at.elementType, dtype)
             }.toArray
 
-            // Infer per-sample shape from shapes option or first row element count
             val perSample = options.shapes.get(colName) match {
               case Some(s) => s
               case None =>
@@ -195,43 +213,143 @@ class SafetensorsDataWriter(
             )
         }
 
-        // Prepend batch_size as the leading dimension
         val fullShape  = Seq(batchSize) ++ perSampleShape
         val descriptor = TensorDescriptor(colName, dtype, fullShape, rawBytes.length.toLong)
         (descriptor, rawBytes)
     }
 
-    // Write safetensors header
-    val descriptors = tensors.map(_._1)
-    val headerBuf   = SafetensorsHeaderWriter.buildHeader(descriptors)
-    val headerBytes = headerBuf.remaining()
-    writeBuffer(headerBuf)
+    writeShardFile(tensors, batchSize)
+    batchBuffer.clear()
+  }
 
-    // Write tensor data in order
-    val dataBytes = tensors.map { case (_, bytes) =>
-      currentShardStream.write(bytes)
-      bytes.length.toLong
-    }.sum
+  /** Handle the tail batch (remaining rows) according to tail_strategy. */
+  private def handleTailBatch(batchSize: Int): Unit = {
+    if (batchBuffer.isEmpty) return
 
-    val writtenTotal = headerBytes.toLong + dataBytes
-    currentShardBytes += writtenTotal
-    currentShardSamples += batchSize
+    options.tailStrategy match {
+      case DropTail =>
+        batchBuffer.clear()
 
-    // Collect index entries for this flush
-    if (options.generateIndex) {
-      val shardFileName = new Path(currentShardPath).getName
-      tensors.foreach { case (desc, _) =>
-        indexEntries += TensorIndexEntry(
-          tensorKey = desc.name,
-          fileName = shardFileName,
-          shape = desc.shape,
-          dtype = desc.dtype.name
-        )
+      case WriteAsIs =>
+        flushBatch() // writes the partial batch as-is
+
+      case PadWithZeros =>
+        val remaining = batchSize - batchBuffer.size
+        // Pad with zero-filled copies of the row structure
+        val paddingRow = buildZeroPaddingRow()
+        (0 until remaining).foreach(_ => batchBuffer += paddingRow)
+        flushBatch()
+    }
+  }
+
+  /** Build a zero-valued InternalRow with the same structure as the real rows.
+    *
+    * For Tensor Struct columns: uses the shape/dtype from the last real row but replaces data bytes
+    * with zeros of the same length. For numeric array columns: uses an array of zeros.
+    */
+  private def buildZeroPaddingRow(): InternalRow = {
+    import org.apache.spark.sql.catalyst.expressions.GenericInternalRow
+    import org.apache.spark.sql.catalyst.util.GenericArrayData
+    import org.apache.spark.unsafe.types.UTF8String
+
+    val fields = schema.fields.map { field =>
+      val colType = field.dataType
+
+      colType match {
+        case st: StructType if TensorSchema.isTensorStruct(st) =>
+          // Clone shape/dtype from the last buffered real row, replace data with zeros
+          val lastRow      = batchBuffer.last
+          val colIdx       = schema.fieldIndex(field.name)
+          val struct       = lastRow.getStruct(colIdx, 3)
+          val dataLen      = struct.getBinary(0).length
+          val shapeArr     = struct.getArray(1)
+          val zeroData     = new Array[Byte](dataLen)
+          val paddedStruct = new GenericInternalRow(3)
+          paddedStruct.update(0, zeroData)
+          paddedStruct.update(1, shapeArr)
+          paddedStruct.update(2, struct.getUTF8String(2))
+          paddedStruct
+
+        case at: ArrayType if TensorSchema.isNumericArrayType(at) =>
+          // Match element count from the last row; fill with zeros
+          val lastRow = batchBuffer.last
+          val colIdx  = schema.fieldIndex(field.name)
+          val n       = lastRow.getArray(colIdx).numElements()
+          val zeros = at.elementType match {
+            case FloatType   => Array.fill[Any](n)(0.0f)
+            case DoubleType  => Array.fill[Any](n)(0.0d)
+            case IntegerType => Array.fill[Any](n)(0)
+            case LongType    => Array.fill[Any](n)(0L)
+            case ShortType   => Array.fill[Any](n)(0.toShort)
+            case ByteType    => Array.fill[Any](n)(0.toByte)
+            case _           => Array.fill[Any](n)(0)
+          }
+          new GenericArrayData(zeros)
+
+        case _ =>
+          null
       }
     }
 
-    batchBuffer.clear()
-    maybeSealShard()
+    new GenericInternalRow(fields.asInstanceOf[Array[Any]])
+  }
+
+  /** Write tensors to a new, self-contained shard file and close the stream immediately. */
+  private def writeShardFile(
+      tensors: Seq[(TensorDescriptor, Array[Byte])],
+      samplesInBatch: Int
+  ): Unit = {
+    val fileName = f"part-${taskId}%05d-${shardIndex}%04d-$taskUuid.safetensors"
+    val filePath = new Path(outputPath, fileName).toString
+    val fs       = new Path(filePath).getFileSystem(hadoopConf)
+    val stream   = fs.create(new Path(filePath))
+    openedShardPaths += filePath
+
+    try {
+      // Write safetensors header
+      val descriptors = tensors.map(_._1)
+      val headerBuf   = SafetensorsHeaderWriter.buildHeader(descriptors)
+      val headerBytes = headerBuf.remaining()
+      val headerArr   = new Array[Byte](headerBytes)
+      headerBuf.get(headerArr)
+      stream.write(headerArr)
+
+      // Write tensor data in descriptor order
+      val dataBytes = tensors.map { case (_, bytes) =>
+        stream.write(bytes)
+        bytes.length.toLong
+      }.sum
+
+      val totalBytes = headerBytes.toLong + dataBytes
+
+      // Collect index entries for this shard
+      if (options.generateIndex) {
+        tensors.foreach { case (desc, _) =>
+          indexEntries += TensorIndexEntry(
+            tensorKey = desc.name,
+            fileName = fileName,
+            shape = desc.shape,
+            dtype = desc.dtype.name
+          )
+        }
+      }
+
+      stream.flush()
+      stream.close()
+
+      shards += ShardInfo(
+        file = fileName,
+        samplesCount = samplesInBatch,
+        bytes = totalBytes
+      )
+    } catch {
+      case e: Exception =>
+        try stream.close()
+        catch { case _: Exception => () }
+        throw e
+    }
+
+    shardIndex += 1
   }
 
   // ---------------------------------------------------------------------------
@@ -241,19 +359,14 @@ class SafetensorsDataWriter(
   private def writeKVRow(row: InternalRow): Unit = {
     val NameColStrategy(nameColName) = options.namingStrategy
 
-    // Extract the base key from the name_col column
-    val nameColIdx = schema.fieldIndex(nameColName)
+    val nameColIdx   = schema.fieldIndex(nameColName)
     val nameColValue = row.getUTF8String(nameColIdx).toString
 
-    // Process each non-key tensor column, emitting one tensor per column
     for ((colName, colIdx, colType) <- columnsToWrite) {
-      // Construct compound tensor key: {name_col_value}{separator}{column_name}
       val tensorKey = s"$nameColValue${options.kvSeparator}$colName"
 
-      // Build tensor descriptor and raw bytes for this column
       val (tensorDescriptor, tensorBytes) = writeKVTensor(row, tensorKey, colName, colIdx, colType)
 
-      // Handle duplicate detection
       if (currentShardTensorKeys.contains(tensorKey)) {
         options.duplicatesStrategy match {
           case FailOnDuplicate =>
@@ -262,64 +375,38 @@ class SafetensorsDataWriter(
                 s"Either use duplicatesStrategy=lastWin or ensure unique keys."
             )
           case LastWinOnDuplicate =>
-            // Silently overwrite: remove the old one and add the new one
             kvTensorBuffer --= kvTensorBuffer.filter(_._1.name == tensorKey)
         }
       }
 
       currentShardTensorKeys += tensorKey
       kvTensorBuffer += ((tensorDescriptor, tensorBytes))
-
-      currentShardSamples += 1
+      kvShardBytes += tensorBytes.length.toLong + 200L // 200 B per-tensor header estimate
+      kvShardSamples += 1
     }
 
-    // Check shard size threshold after all columns for this row are processed
-    val estimatedBytes = kvTensorBuffer.map(_._2.length.toLong).sum + kvTensorBuffer.length * 200L
     val thresholdBytes = options.targetShardSizeMb.toLong * 1024 * 1024
-    if (estimatedBytes >= thresholdBytes) {
+    if (kvShardBytes >= thresholdBytes) {
       flushKVShard()
     }
   }
 
-  /** Flush accumulated KV tensors to a shard file. */
+  /** Flush accumulated KV tensors to a new, self-contained shard file. */
   private def flushKVShard(): Unit = {
     if (kvTensorBuffer.isEmpty) return
 
-    openShardIfNeeded()
+    val tensors        = kvTensorBuffer.toSeq
+    val samplesInShard = kvShardSamples
 
-    // Build one safetensors file with all accumulated tensors
-    val tensors = kvTensorBuffer.toSeq
-    val headerBuf   = SafetensorsHeaderWriter.buildHeader(tensors.map(_._1))
-    val headerBytes = headerBuf.remaining()
-    writeBuffer(headerBuf)
-
-    // Write all tensor data in order
-    tensors.foreach { case (_, bytes) =>
-      currentShardStream.write(bytes)
-    }
-
-    val dataBytes = tensors.map(_._2.length.toLong).sum
-    currentShardBytes += headerBytes.toLong + dataBytes
-
-    // Collect index entries
-    if (options.generateIndex) {
-      val shardFileName = new Path(currentShardPath).getName
-      tensors.foreach { case (desc, _) =>
-        indexEntries += TensorIndexEntry(
-          tensorKey = desc.name,
-          fileName = shardFileName,
-          shape = desc.shape,
-          dtype = desc.dtype.name
-        )
-      }
-    }
+    writeShardFile(tensors, samplesInShard)
 
     kvTensorBuffer.clear()
     currentShardTensorKeys.clear()
-    sealCurrentShard()
+    kvShardBytes = 0L
+    kvShardSamples = 0
   }
 
-  /** Extract a single column from a row as a tensor and return (descriptor, rawBytes). */
+  /** Extract a single column from a row as a tensor descriptor + raw bytes. */
   private def writeKVTensor(
       row: InternalRow,
       tensorKey: String,
@@ -341,11 +428,10 @@ class SafetensorsDataWriter(
 
     val (perSampleShape, bytes) = colType match {
       case st: StructType if TensorSchema.isTensorStruct(st) =>
-        val struct = row.getStruct(colIdx, 3)
+        val struct   = row.getStruct(colIdx, 3)
         val shapeArr = struct.getArray(1)
-        val shape =
-          (0 until shapeArr.numElements()).map(i => shapeArr.getInt(i)).toSeq
-        val data = struct.getBinary(0)
+        val shape    = (0 until shapeArr.numElements()).map(i => shapeArr.getInt(i)).toSeq
+        val data     = struct.getBinary(0)
         (shape, data)
 
       case at: ArrayType if TensorSchema.isNumericArrayType(at) =>
@@ -456,55 +542,6 @@ class SafetensorsDataWriter(
     }
     result
   }
-
-  // ---------------------------------------------------------------------------
-  // Private helpers — shard lifecycle
-  // ---------------------------------------------------------------------------
-
-  private def writeBuffer(buf: ByteBuffer): Unit = {
-    val bytes = new Array[Byte](buf.remaining())
-    buf.get(bytes)
-    currentShardStream.write(bytes)
-  }
-
-  private def openShardIfNeeded(): Unit =
-    if (currentShardStream == null) {
-      val fileName = f"part-${taskId}%05d-$taskUuid.safetensors"
-      currentShardPath = new Path(outputPath, fileName).toString
-      val fs = new Path(currentShardPath).getFileSystem(hadoopConf)
-      currentShardStream = fs.create(new Path(currentShardPath))
-      currentShardBytes = 0L
-      currentShardSamples = 0
-      openedShardPaths += currentShardPath
-    }
-
-  private def maybeSealShard(): Unit = {
-    val thresholdBytes = options.targetShardSizeMb.toLong * 1024 * 1024
-    if (currentShardBytes >= thresholdBytes) {
-      sealCurrentShard()
-    }
-  }
-
-  private def sealCurrentShard(): Unit = {
-    if (currentShardStream == null) return
-    closeShard()
-  }
-
-  private def closeShard(): Unit =
-    if (currentShardStream != null) {
-      currentShardStream.flush()
-      currentShardStream.close()
-      currentShardStream = null
-
-      shards += ShardInfo(
-        file = new Path(currentShardPath).getName,
-        samplesCount = currentShardSamples,
-        bytes = currentShardBytes
-      )
-
-      kvTensorBuffer.clear()
-      currentShardTensorKeys.clear()
-    }
 
 }
 

@@ -59,7 +59,8 @@ class SafetensorsScan(
           // Directory: enumerate direct children that are .safetensors files,
           // sorted by name for deterministic partition ordering.
           // If index is available, filter to only files containing required keys.
-          val allShardsInDir = fs.listStatus(hadoopPath)
+          val allShardsInDir = fs
+            .listStatus(hadoopPath)
             .filter(s => !s.isDirectory && s.getPath.getName.endsWith(".safetensors"))
             .sortBy(_.getPath.getName)
             .toSeq
@@ -67,7 +68,7 @@ class SafetensorsScan(
           // Filter to files that contain at least one required tensor key (if index available)
           val filteredShards = if (indexMap.nonEmpty) {
             allShardsInDir.filter { status =>
-              val fileName = status.getPath.getName
+              val fileName   = status.getPath.getName
               val keysInFile = indexMap.getOrElse(fileName, Set.empty)
               keysInFile.intersect(requiredKeys).nonEmpty
             }
@@ -76,9 +77,10 @@ class SafetensorsScan(
           }
 
           filteredShards.map { s =>
-            val fileName = s.getPath.getName
+            val fileName   = s.getPath.getName
             val keysInFile = indexMap.getOrElse(fileName, Set.empty)
-            val partitionRequired = if (keysInFile.nonEmpty) keysInFile.intersect(requiredKeys) else requiredKeys
+            val partitionRequired =
+              if (keysInFile.nonEmpty) keysInFile.intersect(requiredKeys) else requiredKeys
             SafetensorsInputPartition(s.getPath.toString, partitionRequired)
           }
         }
@@ -87,18 +89,18 @@ class SafetensorsScan(
     partitions.toArray
   }
 
-  /** Load the _tensor_index.parquet if it exists in any of the paths, building a map from
-    * fileName → Set[tensorKey]. Returns empty map if no index is found or on read error.
+  /** Load the _tensor_index.parquet if it exists in any of the paths, building a map from fileName
+    * → Set[tensorKey]. Returns empty map if no index is found or on read error.
     */
   private def loadIndexMap(): Map[String, Set[String]] = {
     try {
       val spark = org.apache.spark.sql.SparkSession.active
       for (rawPath <- paths) {
         val hadoopPath = new Path(rawPath)
-        val fs = FileSystem.get(hadoopPath.toUri, conf)
+        val fs         = FileSystem.get(hadoopPath.toUri, conf)
         if (fs.exists(hadoopPath)) {
-          val status = fs.getFileStatus(hadoopPath)
-          val rootPath = if (status.isDirectory) hadoopPath else hadoopPath.getParent
+          val status    = fs.getFileStatus(hadoopPath)
+          val rootPath  = if (status.isDirectory) hadoopPath else hadoopPath.getParent
           val indexPath = new Path(rootPath, "_tensor_index.parquet")
           if (fs.exists(indexPath)) {
             // Read the index and build the map
@@ -119,7 +121,7 @@ class SafetensorsScan(
       }
     } catch {
       case scala.util.control.NonFatal(_) =>
-        // Silently fall back to no index if reading fails
+      // Silently fall back to no index if reading fails
     }
     Map.empty
   }

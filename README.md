@@ -105,21 +105,22 @@ write modes, selected by mutually exclusive options.
 
 ### Batch mode (`batch_size`)
 
-Groups N input rows into one stacked tensor per column per shard file. Tensor
-keys in each output file equal the column names.
+Groups exactly N input rows into one standalone safetensors file per batch. Every
+output file contains one tensor per column with shape `[batch_size, *per_sample_shape]`,
+ready for direct GPU loading without any further preprocessing.
 
 ```python
 (
     df.write
     .format("safetensors")
-    .option("batch_size", "1000")   # stack 1000 rows into one tensor
+    .option("batch_size", "1000")   # 1000 rows → one tensor per column per file
     .option("dtype", "F32")
     .mode("overwrite")
     .save("/output/tensors/")
 )
 ```
 
-With explicit per-sample shape and a custom shard size:
+With explicit per-sample shape and a custom tail strategy:
 
 ```python
 import json
@@ -130,13 +131,16 @@ import json
     .option("batch_size", "512")
     .option("dtype", "F16")
     .option("shapes", json.dumps({"image": [3, 224, 224], "label": []}))
-    .option("target_shard_size_mb", "500")
+    .option("tail_strategy", "pad")   # zero-pad the last batch to exactly 512 rows
     .mode("overwrite")
     .save("/output/tensors/")
 )
 # Each output file contains tensors shaped [512, 3, 224, 224] and [512].
 # "shapes" specifies the per-sample shape; batch_size is prepended automatically.
 ```
+
+Each Spark partition writes its batches independently. Repartition your DataFrame
+before writing if you need balanced shard counts across partitions.
 
 ### KV-store mode (`name_col`)
 
@@ -188,15 +192,16 @@ Handling duplicate keys (default is `"fail"`):
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `batch_size` | Int | — | **Batch mode.** Stack N rows into one tensor per column. Mutually exclusive with `name_col`. |
+| `batch_size` | Int | — | **Batch mode.** Each N rows produce one output file with stacked tensors. Mutually exclusive with `name_col`. |
 | `name_col` | String | — | **KV mode.** Column whose value becomes the tensor key. Mutually exclusive with `batch_size`. |
+| `tail_strategy` | String | `"drop"` | **Batch mode.** How to handle the last incomplete batch when partition size is not a multiple of `batch_size`: `"drop"` (discard), `"pad"` (zero-pad to `batch_size`), `"write"` (write as-is). |
 | `kv_separator` | String | `"__"` | Separator between `name_col` value and column name in compound tensor key (KV mode with multiple columns). |
 | `dtype` | String | — | Target dtype for encoding: `F16`, `F32`, `F64`, `BF16`, `U8`, `I8`, `U16`, `I16`, `U32`, `I32`, `U64`, `I64`. Required when input columns are numeric arrays. |
 | `columns` | String | all | Comma-separated list of columns to serialize. Other columns are ignored. |
 | `shapes` | JSON | — | Per-sample shape override, e.g. `'{"image": [3, 224, 224]}'`. In batch mode, `batch_size` is prepended automatically as the leading dimension. |
 | `duplicatesStrategy` | String | `"fail"` | Duplicate key behaviour in KV mode: `"fail"` (raise) or `"lastWin"` (keep last). |
 | `generate_index` | Boolean | `false` | Write `_tensor_index.parquet` at the output root for O(1) key lookups. |
-| `target_shard_size_mb` | Int | `300` | Target shard file size in MB. Valid range: 50–1000. |
+| `target_shard_size_mb` | Int | `300` | **KV mode only.** Target shard file size in MB. Valid range: 50–1000. |
 
 ### Accepted input column types
 

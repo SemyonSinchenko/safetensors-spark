@@ -91,7 +91,6 @@ jobs:
 
       - name: Run PySpark integration tests
         env:
-          SAFETENSORS_SPARK_JAR: ${{ steps.find_jar.outputs.jar_path }}
           SPARK_VERSION: ${{ matrix.spark_version }}
         run: |
           JAR=$(ls target/scala-*/safetensors-spark-assembly-*.jar 2>/dev/null || \
