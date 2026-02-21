@@ -118,3 +118,40 @@ def test_log_dataset_raises_if_manifest_missing(tmp_path: Path):
     with mlflow.start_run():
         with pytest.raises(FileNotFoundError, match="dataset_manifest.json"):
             log_dataset(path=str(tmp_path / "nonexistent"))
+
+
+def test_log_dataset_with_local_filesystem(written_dataset):
+    """log_dataset() with explicit LocalFileSystem must work."""
+    import mlflow
+    import sys
+    import pyarrow.fs
+
+    repo_root = Path(__file__).parent.parent.parent
+    sys.path.insert(0, str(repo_root / "python"))
+    from safetensors_spark.mlflow import log_dataset
+
+    with mlflow.start_run() as run:
+        fs = pyarrow.fs.LocalFileSystem()
+        log_dataset(path=written_dataset, name="test_dataset_fs", filesystem=fs)
+        run_id = run.info.run_id
+
+    finished_run = mlflow.get_run(run_id)
+    dataset_inputs = finished_run.inputs.dataset_inputs
+    assert len(dataset_inputs) == 1
+
+
+def test_log_dataset_raises_without_run(written_dataset):
+    """log_dataset() must raise RuntimeError if no active run and no run_id."""
+    import sys
+
+    repo_root = Path(__file__).parent.parent.parent
+    sys.path.insert(0, str(repo_root / "python"))
+    from safetensors_spark.mlflow import log_dataset
+
+    # Ensure no active run
+    import mlflow
+    if mlflow.active_run():
+        mlflow.end_run()
+
+    with pytest.raises(RuntimeError, match="No active MLflow run"):
+        log_dataset(path=written_dataset)

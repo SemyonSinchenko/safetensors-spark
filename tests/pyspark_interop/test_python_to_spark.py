@@ -59,7 +59,7 @@ def test_schema_matches_tensor_struct(spark, simple_safetensors_file):
 
 
 def test_decoded_values_match_numpy(spark, simple_safetensors_file):
-    """Decoded float values must match the original numpy arrays within float32 tolerance."""
+    """Decoded float values must match the original numpy arrays via st_to_array() SQL function."""
     file_path, arrays = simple_safetensors_file
 
     df = (
@@ -68,24 +68,24 @@ def test_decoded_values_match_numpy(spark, simple_safetensors_file):
         .load(str(file_path))
     )
 
-    rows = df.collect()
-    assert len(rows) == 1, "Each safetensors file should produce exactly one row"
-    row = rows[0]
+    # Register the DataFrame as a temp table and use st_to_array() SQL function
+    df.createOrReplaceTempView("safetensors_data")
 
     for tensor_name, np_array in arrays.items():
-        tensor_struct = getattr(row, tensor_name)
-        dtype_str     = tensor_struct.dtype
-        raw_bytes     = bytes(tensor_struct.data)
+        # Use st_to_array() to decode the tensor struct (exercises Catalyst expression)
+        result_df = spark.sql(f"SELECT st_to_array({tensor_name}) as decoded FROM safetensors_data")
+        rows = result_df.collect()
+        assert len(rows) == 1, "Each safetensors file should produce exactly one row"
 
-        # Decode bytes manually
-        n_elems = len(raw_bytes) // 4  # F32 = 4 bytes/element
-        decoded = np.frombuffer(raw_bytes, dtype=np.float32)
+        decoded_array = rows[0]["decoded"]
+        # st_to_array returns a List[Float], convert to numpy for comparison
+        decoded_floats = np.array(decoded_array, dtype=np.float32)
 
         np.testing.assert_allclose(
-            decoded,
+            decoded_floats,
             np_array.flatten(),
             rtol=1e-5,
-            err_msg=f"Mismatch in tensor '{tensor_name}'",
+            err_msg=f"Mismatch in tensor '{tensor_name}' decoded via st_to_array()",
         )
 
 

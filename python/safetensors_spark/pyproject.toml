@@ -23,13 +23,19 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 
-dependencies = [
-    "mlflow>=2.10",
-]
+dependencies = []
 
 [project.optional-dependencies]
+mlflow = [
+    "mlflow>=2.10",
+]
+pyarrow = [
+    "pyarrow>=14.0",
+]
 dev = [
     "pytest>=8.0",
+    "mlflow>=2.10",
+    "pyarrow>=14.0",
 ]
 
 [tool.hatch.build.targets.wheel]

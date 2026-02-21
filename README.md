@@ -220,11 +220,11 @@ All type and schema errors are reported at plan time, before any task starts.
 
 ```
 /output/path/
-  part-00000-<uuid>.safetensors      # shard files
-  part-00001-<uuid>.safetensors
+  part-00000-0000-<uuid>.safetensors      # shard files
+  part-00001-0000-<uuid>.safetensors
   ...
-  dataset_manifest.json              # always written
-  _tensor_index.parquet              # only when generate_index=true
+  dataset_manifest.json                   # always written
+  _tensor_index.parquet                   # only when generate_index=true
 ```
 
 `dataset_manifest.json` structure:
@@ -237,7 +237,7 @@ All type and schema errors are reported at plan time, before any task starts.
   "total_bytes": 204800000,
   "shards": [
     {
-      "file": "part-00000-550e8400-e29b-41d4-a716-446655440000.safetensors",
+      "file": "part-00000-0000-550e8400-e29b-41d4-a716-446655440000.safetensors",
       "samples_count": 1000,
       "bytes": 4096000
     }

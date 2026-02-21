@@ -48,7 +48,7 @@ class SafetensorsExtensionsSpec
 
   it should "register st_to_array function" in {
     spark.sql(
-      "SELECT arr_to_st(array(1.0f, 2.0f), array(2), 'F32') as tensor LIMIT 1"
+      "SELECT st_to_array(arr_to_st(array(1.0f, 2.0f), array(2), 'F32')) LIMIT 1"
     ).collect()
   }
 

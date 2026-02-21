@@ -382,8 +382,10 @@ class SafetensorsDataWriter(
       currentShardTensorKeys += tensorKey
       kvTensorBuffer += ((tensorDescriptor, tensorBytes))
       kvShardBytes += tensorBytes.length.toLong + 200L // 200 B per-tensor header estimate
-      kvShardSamples += 1
     }
+
+    // Increment samples once per input row, not once per tensor column
+    kvShardSamples += 1
 
     val thresholdBytes = options.targetShardSizeMb.toLong * 1024 * 1024
     if (kvShardBytes >= thresholdBytes) {

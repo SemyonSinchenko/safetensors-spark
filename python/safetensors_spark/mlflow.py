@@ -11,16 +11,22 @@ path using standard Python file I/O.
 
 from __future__ import annotations
 
+import hashlib
 import json
-import os
-from pathlib import Path
 from typing import Optional
+
+
+def _get_dataset_source_base():
+    """Lazily import DatasetSource to avoid hard dependency on mlflow."""
+    from mlflow.data.dataset_source import DatasetSource
+    return DatasetSource
 
 
 def log_dataset(
     path: str,
     run_id: Optional[str] = None,
     name: str = "safetensors_dataset",
+    filesystem=None,
 ) -> None:
     """Log the dataset_manifest.json at ``path`` as an MLflow dataset artifact.
 
@@ -38,6 +44,10 @@ def log_dataset(
         (i.e. the run opened by ``mlflow.start_run()``).
     name:
         Display name for the dataset artifact in MLflow UI.
+    filesystem:
+        Optional ``pyarrow.fs.FileSystem`` instance for reading the manifest.
+        Defaults to ``pyarrow.fs.LocalFileSystem()`` if ``None``. Allows
+        reading from remote filesystems (S3, GCS, HDFS, etc.).
 
     Raises
     ------
@@ -49,25 +59,39 @@ def log_dataset(
     import mlflow
     from mlflow.data.dataset_source import DatasetSource
 
-    manifest_path = os.path.join(path, "dataset_manifest.json")
+    if filesystem is None:
+        import pyarrow.fs
+        filesystem = pyarrow.fs.LocalFileSystem()
 
-    if not os.path.exists(manifest_path):
+    manifest_path = f"{path}/dataset_manifest.json"
+
+    try:
+        file_info = filesystem.get_file_info(manifest_path)
+        if file_info.is_file is False:
+            raise FileNotFoundError(
+                f"dataset_manifest.json not found at: {manifest_path}\n"
+                "Run a safetensors write operation first to generate the manifest."
+            )
+    except Exception as e:
+        if isinstance(e, FileNotFoundError):
+            raise
         raise FileNotFoundError(
             f"dataset_manifest.json not found at: {manifest_path}\n"
             "Run a safetensors write operation first to generate the manifest."
-        )
+        ) from e
 
-    with open(manifest_path, "r", encoding="utf-8") as f:
+    with filesystem.open_input_file(manifest_path) as f:
         manifest = json.load(f)
 
     # Build a custom dataset source pointing to the manifest
     source = _SafetensorsDatasetSource(uri=path, manifest=manifest)
 
-    dataset = mlflow.data.from_json(
-        path=manifest_path,
-        source=source,
-        name=name,
-    )
+    # Compute digest from source
+    source_dict = source.to_dict()
+    source_json = json.dumps(source_dict, sort_keys=True)
+    digest = hashlib.md5(source_json.encode()).hexdigest()
+
+    dataset = mlflow.data.Dataset(source=source, name=name, digest=digest)
 
     client = mlflow.MlflowClient()
     effective_run_id = run_id or _get_active_run_id()
@@ -91,7 +115,7 @@ def _get_active_run_id() -> str:
     return active_run.info.run_id
 
 
-class _SafetensorsDatasetSource(DatasetSource):
+class _SafetensorsDatasetSource(_get_dataset_source_base()):
     """Minimal MLflow DatasetSource that wraps a safetensors output directory."""
 
     def __init__(self, uri: str, manifest: dict) -> None:
