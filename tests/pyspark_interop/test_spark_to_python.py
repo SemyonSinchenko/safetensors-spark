@@ -497,18 +497,24 @@ def test_bf16_write_round_trip(spark, tmp_path: Path):
     """BF16 tensors written from Spark must be readable by the Python safetensors library.
 
     Uses arr_to_st() to create BF16 Tensor Structs, writes them, then reads back
-    with safetensors.safe_open and verifies the dtype is preserved.
+    with safetensors.safe_open and verifies the dtype is preserved and values round-trip.
 
     NOTE: BF16 is not in the JSON schema regex — see §1.1.
+    Requires ml_dtypes package for safetensors to handle BF16 in numpy framework.
     """
     import safetensors
+    import ml_dtypes
 
     from pyspark.sql import Row
     from pyspark.sql.types import (
         ArrayType, FloatType, StructField, StructType,
     )
 
-    rows = [Row(floats=[1.0, 0.5, -1.0, 2.0]), Row(floats=[0.0, 3.0, -0.5, 1.5])]
+    expected_rows = [
+        [1.0, 0.5, -1.0, 2.0],
+        [0.0, 3.0, -0.5, 1.5],
+    ]
+    rows = [Row(floats=row) for row in expected_rows]
     df_raw = spark.createDataFrame(
         rows, StructType([StructField("floats", ArrayType(FloatType()), False)])
     ).coalesce(1)
@@ -534,10 +540,26 @@ def test_bf16_write_round_trip(spark, tmp_path: Path):
             keys = list(f.keys())
             assert "tensor" in keys, f"Expected 'tensor' key in {shard.name}"
             t = f.get_tensor("tensor")
-            assert t.dtype == np.float32 or str(t.dtype) in ("bfloat16", "float32"), (
-                f"Expected bfloat16-compatible tensor, got {t.dtype}"
+
+            # Verify dtype is BF16 (requires ml_dtypes)
+            assert t.dtype == ml_dtypes.bfloat16, \
+                f"Expected bfloat16 tensor, got {t.dtype}"
+
+            # Verify shape: batch of 2 rows, 4 elements per row
+            assert t.shape == (2, 4), f"Expected shape (2, 4), got {t.shape}"
+
+            # Verify values round-trip correctly
+            # BF16 truncation may lose precision in the lower mantissa,
+            # but exact powers of 2 (1, 0.5, -1, 2, 0, 3, -0.5, 1.5) are preserved.
+            t_f32 = t.astype(np.float32)
+            expected_flat = np.array(expected_rows).flatten()
+            np.testing.assert_allclose(
+                t_f32.flatten(),
+                expected_flat,
+                rtol=1e-2,
+                atol=1e-6,
+                err_msg="BF16 round-trip values mismatch (truncation may lose mantissa bits)",
             )
-            assert t.shape[1] == 4, f"Expected 4 elements per sample, got {t.shape[1]}"
 
 
 def test_name_col_basic(spark, tmp_path: Path):
