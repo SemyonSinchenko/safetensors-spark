@@ -14,11 +14,11 @@ Apache Spark Native Safetensors DataSource
 
 ## Compatibility
 
-| Component | Version |
-|-----------|---------|
+| Component    | Version      |
+| ------------ | ------------ |
 | Apache Spark | 4.0.x, 4.1.x |
-| Java | 11+ |
-| Scala | 2.13 |
+| Java         | 11+          |
+| Scala        | 2.13         |
 
 ---
 
@@ -84,6 +84,7 @@ df.printSchema()
 ### ✅ Implemented Features
 
 **Read Path**
+
 - DataSource V2 TableProvider with short name "safetensors"
 - Schema inference from first file header or `_tensor_index.parquet`
 - Explicit schema via `.schema(...)`
@@ -92,6 +93,7 @@ df.printSchema()
 - Local mmap read + remote filesystem read (HDFS, S3, GCS)
 
 **Write Path**
+
 - Batch mode (`batch_size`) with tail strategies: drop, pad, write
 - KV mode (`name_col`) with multi-column support
 - Custom `kv_separator` for compound tensor keys
@@ -101,41 +103,44 @@ df.printSchema()
 - Overwrite mode support (`mode("overwrite")`)
 
 **Catalyst Expressions**
+
 - `arr_to_st(arrayCol, shape, dtype)` — converts Array to Tensor Struct
 - `st_to_array(tensorCol)` — decodes Tensor Struct to Array[Floats]
 
 **MLflow Integration**
+
 - Python `log_dataset()` function (pure Python, no Spark dependency)
 - JVM `SafetensorsDatasetSource` utility
 
 **Testing**
+
 - Unit tests for all core components
 - Bidirectional Python↔Spark integration tests
 
 ### 📋 Not Implemented
 
 - **Predicate pushdown** (dtype/shape filtering at file level) — predicates are
-  currently returned as post-scan filters. See `format/SPECIFICATION.md` §3.7.
+  currently returned as post-scan filters.
 
 ---
 
 ## Documentation
 
-| Document | Purpose |
-|----------|---------|
-| `README.md` | User-facing API and examples |
-| `format/SPECIFICATION.md` | Binary format, JSON schemas, output layout |
-| `format/manifest-jsonschema.json` | Manifest JSON schema |
-| `AGENTS.md` | Build commands, code style, invariants (for developers/agents) |
+| Document                          | Purpose                                                        |
+| --------------------------------- | -------------------------------------------------------------- |
+| `README.md`                       | User-facing API and examples                                   |
+| `format/SPECIFICATION.md`         | Binary format, JSON schemas, output layout                     |
+| `format/manifest-jsonschema.json` | Manifest JSON schema                                           |
+| `AGENTS.md`                       | Build commands, code style, invariants (for developers/agents) |
 
 ---
 
 ## Limitations & Known Caveats
 
-| Limitation | Detail |
-|------------|--------|
-| BF16/F16 write approximation | `arr_to_st()` uses truncation, not round-to-nearest-even. |
-| Schema inference reads one file | All files assumed to share the first file's schema. |
-| No mid-file splits | One `.safetensors` file = one Spark task. |
-| Off-heap mapping on JVM < 21 | `MappedByteBuffer` cannot be explicitly unmapped before GC. |
-| `_metadata.parquet` reserved | Global index uses `_tensor_index.parquet` instead. |
+| Limitation                      | Detail                                                      |
+| ------------------------------- | ----------------------------------------------------------- |
+| BF16/F16 write approximation    | `arr_to_st()` uses truncation, not round-to-nearest-even.   |
+| Schema inference reads one file | All files assumed to share the first file's schema.         |
+| No mid-file splits              | One `.safetensors` file = one Spark task.                   |
+| Off-heap mapping on JVM < 21    | `MappedByteBuffer` cannot be explicitly unmapped before GC. |
+| `_metadata.parquet` reserved    | Global index uses `_tensor_index.parquet` instead.          |
