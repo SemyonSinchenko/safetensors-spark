@@ -10,6 +10,57 @@ Apache Spark Native Safetensors DataSource
 
 ## Motivation
 
+Preparing training data for distributed PyTorch workloads typically starts in Apache
+Spark, but the handoff between Spark and PyTorch is painful. The common approaches
+all have meaningful drawbacks:
+
+- **Parquet** requires decompression and columnar-to-row conversion at load time;
+  PyTorch `DataLoader` workers spend measurable CPU time on this before the GPU
+  sees any data.
+- **Arrow/IPC files** are faster but still carry a schema negotiation layer and are
+  not natively understood by the HuggingFace `safetensors` ecosystem.
+- **Custom binary formats** (raw `.bin`, `.npy` shards) require bespoke readers on
+  both the Spark side and the PyTorch side, with no shared contract.
+
+[Safetensors](https://github.com/huggingface/safetensors) is a simple, open format
+designed for exactly this boundary: zero-copy mmap loading, no decompression, and
+direct dtype-aware tensor materialisation. This project brings a native Apache Spark
+DataSource V2 connector for safetensors, so the full Spark → PyTorch pipeline
+becomes a single `.write.format("safetensors")` call.
+
+### Trade-offs vs Parquet / Arrow
+
+| | Safetensors | Parquet | Arrow/IPC |
+|---|---|---|---|
+| PyTorch load speed | ✅ Fast (mmap, zero-copy) | ⚠️ Slower (decompress + convert) | ⚠️ Moderate |
+| Compression | ❌ None | ✅ Snappy/Zstd/etc. | ✅ Optional |
+| Storage size | ❌ Larger on disk | ✅ Compact | ⚠️ Moderate |
+| Native PyTorch support | ✅ First-class | ❌ Needs adapter | ❌ Needs adapter |
+| Format complexity | ✅ Trivial (8-byte header + JSON + bytes) | ⚠️ Complex | ⚠️ Moderate |
+| Random key access | ✅ O(1) by tensor key | ❌ Row-group scan | ⚠️ Moderate |
+
+The lack of compression is the main cost. For large float tensors the on-disk
+footprint will be noticeably larger than Parquet with Zstd. If storage cost
+dominates over training throughput, Parquet remains the right choice.
+
+### Two write modes
+
+**Batch mode** (`batch_size` option) stacks every N input rows into one tensor
+along the leading dimension and writes one standalone safetensors file per batch.
+This is the natural fit for **offline batch training**: the PyTorch `DataLoader`
+can simply glob the output directory and iterate over files, with no manifest
+parsing required.
+
+**KV mode** (`name_col` option) writes each input row as one or more individually
+named tensors, keyed by a string column. Files roll over when they reach a
+configurable size threshold. This targets a **cold/warm feature store** pattern:
+embeddings or precomputed features are written once from Spark and later retrieved
+by key from PyTorch inference code. Random access is fast because safetensors
+stores byte offsets per key in the file header, so a single seek suffices. This
+is not suitable for hot, low-latency serving (a dedicated vector store is better
+there), but works well for nightly-refreshed feature tables consumed during
+training or batch inference.
+
 ---
 
 ## Compatibility
