@@ -14,6 +14,10 @@ val scalaVersionValue =
   if (sparkVersion.startsWith("4.")) "2.13.14"
   else "2.12.18"
 
+// Spark minor version shim selector: "spark-4.0", "spark-4.1", etc.
+// Extracts the first two version components, e.g. "4.0.1" -> "spark-4.0"
+val sparkShimDir = "spark-" + sparkVersion.split("\\.").take(2).mkString(".")
+
 ThisBuild / scalaVersion := scalaVersionValue
 ThisBuild / organization := "io.github.semyonsinchenko"
 ThisBuild / version      := "0.1.0-SNAPSHOT"
@@ -35,6 +39,13 @@ lazy val root = (project in file("."))
       "-unchecked",
       "-Xfatal-warnings",
     ),
+
+    // ---- Shim source directory ----------------------------------------------
+    // Add the Spark-version-specific shim directory so that the correct
+    // implementation of Errors (and any future shims) is picked up at compile
+    // time, while the shared sources in src/main/scala remain unchanged.
+    Compile / unmanagedSourceDirectories +=
+      baseDirectory.value / "src" / "main" / s"scala-$sparkShimDir",
 
     // ---- Dependencies -------------------------------------------------------
     libraryDependencies ++= Seq(
