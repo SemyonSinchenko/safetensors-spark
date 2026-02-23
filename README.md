@@ -1,47 +1,30 @@
-# safetensors-spark
+<div align="center">
 
-Apache Spark DataSource V2 connector for reading and writing
-[Hugging Face safetensors](https://github.com/huggingface/safetensors) files
-at scale. Designed for training data preparation and static feature stores,
-with zero-copy read compatibility with PyTorch/Horovod.
+**Safetensors Spark**
+
+Apache Spark Native Safetensors DataSource
+
+</div>
 
 ---
 
-## Requirements
+## Motivation
+
+---
+
+## Compatibility
 
 | Component | Version |
 |-----------|---------|
-| Apache Spark | 4.0+ |
-| Java | 11 or 17 |
-| Scala | 2.13 (inferred from Spark version) |
-| Python (integration tests / MLflow utility) | 3.10+ |
+| Apache Spark | 4.0.x, 4.1.x |
+| Java | 11+ |
+| Scala | 2.13 |
 
 ---
 
 ## Installation
 
-Attach the fat JAR when submitting a Spark job:
-
-```bash
-spark-submit --jars safetensors-spark-assembly-<version>.jar ...
-```
-
-Or in a SparkSession:
-
-```python
-spark = (
-    SparkSession.builder
-    .config("spark.jars", "/path/to/safetensors-spark-assembly-<version>.jar")
-    .getOrCreate()
-)
-```
-
-Build the JAR from source:
-
-```bash
-sbt assembly
-# target/scala-2.13/safetensors-spark-assembly-<version>.jar
-```
+> TBD
 
 ---
 
@@ -96,48 +79,6 @@ df.printSchema()
 
 ---
 
-## File Layout
-
-```
-safetensors-spark/
-  src/main/scala/.../
-    core/              # Core data types and parsing
-      SafetensorsDtype.scala
-      TensorSchema.scala
-      SafetensorsHeader.scala
-      SafetensorsHeaderParser.scala
-      SafetensorsHeaderWriter.scala
-    read/              # DataSource V2 read path
-      SafetensorsScanBuilder.scala
-      SafetensorsScan.scala
-      SafetensorsPartitionReader.scala
-      ...
-    write/             # DataSource V2 write path
-      WriteOptions.scala
-      SafetensorsWriteBuilder.scala
-      SafetensorsBatchWrite.scala
-      SafetensorsDataWriter.scala
-      ...
-    expressions/       # Catalyst SQL expressions
-      ArrToStExpression.scala
-      StToArrayExpression.scala
-    manifest/          # Dataset manifest
-      DatasetManifest.scala
-    mlflow/            # MLflow integration
-      SafetensorsDatasetSource.scala
-
-  python/safetensors_spark/
-    mlflow.py          # log_dataset() utility
-
-  format/
-    format.md          # Safetensors binary format (ground truth)
-    safetensors.schema.json   # Header JSON schema
-    manifest-jsonschema.json  # Dataset manifest JSON schema
-    SPECIFICATION.md   # Format specification reference
-```
-
----
-
 ## Roadmap
 
 ### ✅ Implemented Features
@@ -184,8 +125,6 @@ safetensors-spark/
 |----------|---------|
 | `README.md` | User-facing API and examples |
 | `format/SPECIFICATION.md` | Binary format, JSON schemas, output layout |
-| `format/format.md` | Safetensors format ground truth (from HF) |
-| `format/safetensors.schema.json` | Header JSON schema (from HF) |
 | `format/manifest-jsonschema.json` | Manifest JSON schema |
 | `AGENTS.md` | Build commands, code style, invariants (for developers/agents) |
 
