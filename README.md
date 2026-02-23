@@ -2,8 +2,17 @@
 
 <img src="/static/safetensors_spark_logo.png" alt="Safetensors Spark Logo"/>
 
+<br/>
+
+<a href="https://github.com/SemyonSinchenko/safetensors-spark/actions/workflows/ci.yml">
+  <img src="https://github.com/SemyonSinchenko/safetensors-spark/actions/workflows/ci.yml/badge.svg" alt="CI"/>
+</a>
+<a href="https://opensource.org/licenses/Apache-2.0">
+  <img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License"/>
+</a>
+
 </div>
-[![CI](https://github.com/SemyonSinchenko/safetensors-spark/actions/workflows/ci.yml/badge.svg)](https://github.com/SemyonSinchenko/safetensors-spark/actions/workflows/ci.yml) [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
 ---
 
 ## Motivation
