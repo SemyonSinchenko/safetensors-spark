@@ -15,6 +15,63 @@
 
 ---
 
+## Overview
+
+### How Spark Rows Map to Safetensors Files
+
+The connector supports two write modes. In **Batch mode** every `batch_size` rows
+are stacked into a single safetensors file, one tensor per column. In **KV mode**
+each row is written as individually named tensors keyed by a string column, with
+files rolling over at a configurable size threshold.
+
+```mermaid
+flowchart TD
+    subgraph Spark["Apache Spark"]
+        DF["DataFrame\n(rows × columns)"]
+        P0["Partition 0"]
+        P1["Partition 1"]
+        PN["Partition N"]
+        DF --> P0 & P1 & PN
+    end
+
+    subgraph BatchMode["Batch Mode  (batch_size = B)"]
+        direction TB
+        P0 -->|"rows 0..B-1"| F0["part-00000-0000-&lt;uuid&gt;.safetensors\ntensors: col_a[B,…], col_b[B,…]"]
+        P0 -->|"rows B..2B-1"| F1["part-00000-0001-&lt;uuid&gt;.safetensors\ntensors: col_a[B,…], col_b[B,…]"]
+        P1 -->|"rows 0..B-1"| F2["part-00001-0000-&lt;uuid&gt;.safetensors\ntensors: col_a[B,…], col_b[B,…]"]
+    end
+
+    subgraph KVMode["KV Mode  (name_col = 'id')"]
+        direction TB
+        P0 -->|"row: id=alice, emb=[…]"| K0["part-00000-0000-&lt;uuid&gt;.safetensors\nkey: alice::emb → tensor[…]"]
+        P0 -->|"row: id=bob,   emb=[…]"| K0
+        P1 -->|"row: id=carol, emb=[…]"| K1["part-00001-0000-&lt;uuid&gt;.safetensors\nkey: carol::emb → tensor[…]"]
+    end
+```
+
+### Generated Directory Structure
+
+```mermaid
+graph TD
+    ROOT["/output/path/"]
+
+    ROOT --> S0["part-00000-0000-&lt;uuid&gt;.safetensors"]
+    ROOT --> S1["part-00000-0001-&lt;uuid&gt;.safetensors"]
+    ROOT --> S2["part-00001-0000-&lt;uuid&gt;.safetensors"]
+    ROOT --> SN["part-NNNNN-MMMM-&lt;uuid&gt;.safetensors"]
+    ROOT --> MF["dataset_manifest.json"]
+    ROOT --> IX["_tensor_index.parquet\n(only when generate_index=true)"]
+
+    S0 --> S0H["Header (JSON)\n• tensor offsets\n• dtype, shape per key"]
+    S0 --> S0B["Byte buffer\n• raw little-endian tensor data"]
+
+    MF --> MFC["{\n  format_version,\n  total_samples,\n  total_bytes,\n  shards: […],\n  schema: {…}\n}"]
+
+    IX --> IXC["Columns:\n  tensor_key | file_name | shape | dtype"]
+```
+
+---
+
 ## Motivation
 
 Preparing training data for distributed PyTorch workloads typically starts in Apache
