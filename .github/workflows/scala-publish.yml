@@ -21,9 +21,9 @@ jobs:
       matrix:
         include:
           - spark-version: 4.0.2
-            java-version: 17
+            java: 17
           - spark-version: 4.1.0
-            java-version: 17
+            java: 17
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
