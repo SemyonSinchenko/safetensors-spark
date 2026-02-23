@@ -27,6 +27,7 @@ ThisBuild / version      := "0.1.0-SNAPSHOT"
 // ---- POM / Maven Central metadata (required by sbt-ci-release) ------------
 ThisBuild / homepage := Some(url("https://github.com/SemyonSinchenko/safetensors-spark"))
 ThisBuild / licenses := Seq("Apache-2.0" -> url("https://www.apache.org/licenses/LICENSE-2.0"))
+ThisBuild / versionScheme := Some("semver-spec")
 ThisBuild / scmInfo := Some(
   ScmInfo(
     browseUrl  = url("https://github.com/SemyonSinchenko/safetensors-spark"),
