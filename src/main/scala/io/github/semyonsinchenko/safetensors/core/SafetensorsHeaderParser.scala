@@ -36,8 +36,6 @@ object SafetensorsHeaderParser {
     *   ByteBuffer backed by the file (e.g. a MappedByteBuffer).
     * @return
     *   Parsed SafetensorsHeader.
-    * @throws IllegalArgumentException
-    *   if the header is malformed.
     */
   def parse(buf: ByteBuffer): SafetensorsHeader = {
     buf.order(ByteOrder.LITTLE_ENDIAN)
