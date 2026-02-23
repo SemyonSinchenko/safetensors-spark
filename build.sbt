@@ -1,6 +1,3 @@
-import sbtrelease.ReleaseStateTransformations._
-import xerial.sbt.Sonatype._
-
 // ---------------------------------------------------------------------------
 // safetensors-spark — Apache Spark DataSource V2 for Hugging Face safetensors
 // ---------------------------------------------------------------------------
@@ -11,11 +8,10 @@ val sparkVersion = sys.props.getOrElse("sparkVersion", "4.1.0")
 
 // Scala version is inferred from Spark major version to simplify
 // future cross-version testing:
-//   Spark 3.x -> Scala 2.12
 //   Spark 4.x -> Scala 2.13
 val scalaVersionValue =
-  if (sparkVersion.startsWith("4.")) "2.13.14"
-  else "2.12.18"
+  if (sparkVersion.startsWith("4.")) "2.13.18"
+  else "2.13.18"
 
 // Spark minor version shim selector: "spark-4.0", "spark-4.1", etc.
 // Extracts the first two version components, e.g. "4.0.1" -> "spark-4.0"

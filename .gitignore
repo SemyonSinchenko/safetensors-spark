@@ -185,6 +185,7 @@ spark-warehouse/
 *.bloop/
 .bsp
 .metals
+*metals.sbt
 
 # MLFlow
 mlflow.db
