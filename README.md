@@ -201,7 +201,63 @@ training or batch inference.
 
 ## Installation
 
-> TBD
+The connector is published to Maven Central. The artifact name is parameterised by
+the **minor** Spark version you are targeting:
+
+```
+io.github.semyonsinchenko:safetensors-spark-<sparkMinorVersion>_2.13:<version>
+```
+
+For example, for **Spark 4.0** and connector version **0.0.1**:
+
+```
+io.github.semyonsinchenko:safetensors-spark-4.0_2.13:0.0.1
+```
+
+### Adding the JAR
+
+The JAR **must** be on the Spark classpath. The recommended way for interactive or
+script use is the `--packages` flag, which resolves the artifact from Maven Central
+automatically:
+
+```bash
+pyspark --packages io.github.semyonsinchenko:safetensors-spark-4.0_2.13:0.0.1
+```
+
+For cluster deployments (e.g. `spark-submit`) use the same flag:
+
+```bash
+spark-submit \
+  --packages io.github.semyonsinchenko:safetensors-spark-4.0_2.13:0.0.1 \
+  your_script.py
+```
+
+### Registering the Spark extension
+
+The connector exposes two Catalyst expressions (`arr_to_st` and `st_to_array`) that
+must be registered via the Spark extensions mechanism. Add the following config
+**before** the `SparkSession` is created:
+
+```python
+spark = (
+    SparkSession.builder
+    .config(
+        "spark.sql.extensions",
+        "io.github.semyonsinchenko.safetensors.SafetensorsExtensions",
+    )
+    .getOrCreate()
+)
+```
+
+Or equivalently in `spark-defaults.conf` / cluster config:
+
+```
+spark.sql.extensions=io.github.semyonsinchenko.safetensors.SafetensorsExtensions
+```
+
+> **Note:** The extension registration is required only if you use the
+> `arr_to_st()` or `st_to_array()` SQL/DataFrame functions. Plain
+> `.write.format("safetensors")` and `.read.format("safetensors")` work without it.
 
 ---
 
