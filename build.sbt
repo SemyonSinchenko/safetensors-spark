@@ -22,7 +22,6 @@ val sparkMinorVersion = sparkVersion.split("\\.").take(2).mkString(".")
 
 ThisBuild / scalaVersion := scalaVersionValue
 ThisBuild / organization := "io.github.semyonsinchenko"
-ThisBuild / version      := "0.1.0-SNAPSHOT"
 
 // ---- POM / Maven Central metadata (required by sbt-ci-release) ------------
 ThisBuild / homepage := Some(url("https://github.com/SemyonSinchenko/safetensors-spark"))
