@@ -75,7 +75,7 @@ training or batch inference.
 | Component    | Version      |
 | ------------ | ------------ |
 | Apache Spark | 4.0.x, 4.1.x |
-| Java         | 11+          |
+| Java         | 17+          |
 | Scala        | 2.13         |
 
 ---
