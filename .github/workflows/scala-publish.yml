@@ -1,0 +1,49 @@
+name: Maven-Central
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "*.*.*"
+
+# In the case of pushing the tag, it will publish the release.
+# In the case of pushing to the main, it will publish the SNAPSHOT
+
+# From the docs (https://github.com/sbt/sbt-ci-release):
+# - git tag pushes are published as regular releases to Maven Central
+# - merge into main commits are published as -SNAPSHOT with a unique version number for every commit
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - spark-version: 4.0.2
+            java-version: 17
+          - spark-version: 4.1.0
+            java-version: 17
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java ${{ matrix.java }}
+        uses: actions/setup-java@v5
+        with:
+          distribution: "temurin"
+          java-version: ${{ matrix.java }}
+
+      - name: Set up sbt
+        uses: sbt/setup-sbt@v1
+
+      - name: Run the release
+        run: sbt -Dspark.version=${{ matrix.spark-version }} ci-release
+        env:
+          PGP_PASSPHRASE: ${{ secrets.PGP_PASSPHRASE }}
+          PGP_SECRET: ${{ secrets.PGP_SECRET }}
+          SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
+          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
