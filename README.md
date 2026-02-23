@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="/static/safetensors_spark_logo.png" alt="Safetensors Spark Logo" width="500"/>
+
 **Safetensors Spark**
 
 Apache Spark Native Safetensors DataSource
