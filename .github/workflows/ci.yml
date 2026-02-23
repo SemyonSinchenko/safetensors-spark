@@ -20,8 +20,6 @@ jobs:
       matrix:
         include:
           - spark_version: "4.0.1"
-            java: "11"
-          - spark_version: "4.0.1"
             java: "17"
           - spark_version: "4.1.0"
             java: "17"

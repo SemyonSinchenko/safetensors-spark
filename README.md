@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="/static/safetensors_spark_logo.png" alt="Safetensors Spark Logo" width="500"/>
+<img src="/static/safetensors_spark_logo.png" alt="Safetensors Spark Logo"/>
 
 **Safetensors Spark**
 
