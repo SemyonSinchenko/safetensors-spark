@@ -30,14 +30,14 @@ becomes a single `.write.format("safetensors")` call.
 
 ### Trade-offs vs Parquet / Arrow
 
-| | Safetensors | Parquet | Arrow/IPC |
-|---|---|---|---|
-| PyTorch load speed | ✅ Fast (mmap, zero-copy) | ⚠️ Slower (decompress + convert) | ⚠️ Moderate |
-| Compression | ❌ None | ✅ Snappy/Zstd/etc. | ✅ Optional |
-| Storage size | ❌ Larger on disk | ✅ Compact | ⚠️ Moderate |
-| Native PyTorch support | ✅ First-class | ❌ Needs adapter | ❌ Needs adapter |
-| Format complexity | ✅ Trivial (8-byte header + JSON + bytes) | ⚠️ Complex | ⚠️ Moderate |
-| Random key access | ✅ O(1) by tensor key | ❌ Row-group scan | ⚠️ Moderate |
+|                        | Safetensors                               | Parquet                          | Arrow/IPC        |
+| ---------------------- | ----------------------------------------- | -------------------------------- | ---------------- |
+| PyTorch load speed     | ✅ Fast (mmap, zero-copy)                 | ⚠️ Slower (decompress + convert) | ⚠️ Moderate      |
+| Compression            | ❌ None                                   | ✅ Snappy/Zstd/etc.              | ✅ Optional      |
+| Storage size           | ❌ Larger on disk                         | ✅ Compact                       | ⚠️ Moderate      |
+| Native PyTorch support | ✅ First-class                            | ❌ Needs adapter                 | ❌ Needs adapter |
+| Format complexity      | ✅ Trivial (8-byte header + JSON + bytes) | ⚠️ Complex                       | ⚠️ Moderate      |
+| Random key access      | ✅ O(1) by tensor key                     | ❌ Row-group scan                | ⚠️ Moderate      |
 
 The lack of compression is the main cost. For large float tensors the on-disk
 footprint will be noticeably larger than Parquet with Zstd. If storage cost
