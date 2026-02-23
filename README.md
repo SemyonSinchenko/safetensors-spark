@@ -184,12 +184,12 @@ df.printSchema()
 
 ## Documentation
 
-| Document                          | Purpose                                                        |
-| --------------------------------- | -------------------------------------------------------------- |
-| `README.md`                       | User-facing API and examples                                   |
-| `format/SPECIFICATION.md`         | Binary format, JSON schemas, output layout                     |
-| `format/manifest-jsonschema.json` | Manifest JSON schema                                           |
-| `AGENTS.md`                       | Build commands, code style, invariants (for developers/agents) |
+| Document                             | Purpose                                                        |
+| ------------------------------------ | -------------------------------------------------------------- |
+| `README.md`                          | User-facing API and examples                                   |
+| `format/SPECIFICATION.md`            | Binary format, JSON schemas, output layout                     |
+| `format/ataset_manifest.schema.json` | Manifest JSON schema                                           |
+| `AGENTS.md`                          | Build commands, code style, invariants (for developers/agents) |
 
 ---
 
