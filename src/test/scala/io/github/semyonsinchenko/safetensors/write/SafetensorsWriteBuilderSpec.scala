@@ -11,8 +11,8 @@ import scala.jdk.CollectionConverters._
 
 /** Unit tests for SafetensorsWriteBuilder schema validation.
   *
-  * Verifies that all schema validation happens eagerly at buildForBatch() time,
-  * throwing AnalysisException with clear messages for invalid inputs.
+  * Verifies that all schema validation happens eagerly at buildForBatch() time, throwing
+  * AnalysisException with clear messages for invalid inputs.
   *
   * Tests validate:
   *   - Non-numeric ArrayType rejection
@@ -38,9 +38,9 @@ class SafetensorsWriteBuilderSpec extends AnyFlatSpec with Matchers {
   ): SafetensorsWriteBuilder = {
     val optionsMap = new CaseInsensitiveStringMap(options.asJava)
     val info = new LogicalWriteInfo {
-      override def schema(): StructType = inputSchema
+      override def schema(): StructType                = inputSchema
       override def options(): CaseInsensitiveStringMap = optionsMap
-      override def queryId(): String = "test-query-id"
+      override def queryId(): String                   = "test-query-id"
     }
     new SafetensorsWriteBuilder(info, optionsMap, Seq("/tmp/out"))
   }
@@ -217,7 +217,22 @@ class SafetensorsWriteBuilderSpec extends AnyFlatSpec with Matchers {
   behavior of "Dtype validation"
 
   it should "accept all valid dtypes" in {
-    for (dtype <- Seq("F16", "F32", "F64", "BF16", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64")) {
+    for (
+      dtype <- Seq(
+        "F16",
+        "F32",
+        "F64",
+        "BF16",
+        "U8",
+        "I8",
+        "U16",
+        "I16",
+        "U32",
+        "I32",
+        "U64",
+        "I64"
+      )
+    ) {
       val schema = StructType(Seq(StructField("floats", ArrayType(FloatType), nullable = false)))
 
       val builder = createWriteBuilder(schema, Map("batch_size" -> "10", "dtype" -> dtype))
@@ -237,4 +252,5 @@ class SafetensorsWriteBuilderSpec extends AnyFlatSpec with Matchers {
 
     ex.getMessage should include("dtype")
   }
+
 }

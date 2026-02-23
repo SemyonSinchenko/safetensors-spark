@@ -4,8 +4,8 @@ import org.apache.spark.sql.AnalysisException
 
 /** Spark 4.1.x shim for AnalysisException construction.
   *
-  * In Spark 4.1.x the AnalysisException constructor accepts an optional errorClass
-  * and a free-form message string, matching the original implementation.
+  * In Spark 4.1.x the AnalysisException constructor accepts an optional errorClass and a free-form
+  * message string, matching the original implementation.
   */
 object Errors {
 
