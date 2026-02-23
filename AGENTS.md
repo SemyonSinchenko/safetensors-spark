@@ -1,10 +1,9 @@
-# Agent & Developer Quick Reference: safetensors-spark
+# Agent & Developer Quick Reference
 
 Quick reference for coding agents and developers working in this repository.
 
-- **Feature specification** (what to build): `SPECIFICATION.md`
-- **User API & examples** (how users call the library): `README.md`
-- **Format ground-truth** (binary layout, JSON schema): `format/format.md`, `format/safetensors.schema.json`
+**For user-facing API and usage examples see `README.md`.**
+**For format specification see `format/SPECIFICATION.md`.**
 
 ---
 
@@ -28,15 +27,15 @@ sbt "testOnly *SafetensorsHeaderParserSpec -- -z 'parse a scalar'"
 # Different Spark version (Scala version inferred automatically)
 sbt -DsparkVersion=4.0.1 test
 
-# Check formatting (CI will fail if this fails)
-sbt scalafmtCheck
+CI will fail if this fails)
+sbt scalafmt# Check formatting (Check
 
 # Apply formatting
 sbt scalafmt
 
-# Build fat JAR for cluster / integration tests
+# Build fat JAR tests
 sbt assembly
-# Output: target/scala-2.13/safetensors-spark-assembly-*.jar
+# Output: target/scala for cluster / integration-2.13/safetensors-spark-assembly-*.jar
 ```
 
 ### Python integration tests (uv + pytest)
@@ -160,7 +159,7 @@ import scala.jdk.CollectionConverters._
 |-----------|-----------|---------|
 | Classes, objects, traits | `PascalCase` | `SafetensorsTableProvider` |
 | Methods, `val`, `var`, parameters | `camelCase` | `headerSize`, `buildForBatch` |
-| Module-level constants | `UPPER_SNAKE_CASE` | `DATA_FIELD`, `MIN_SHARD_SIZE_MB` |
+| Module-levelPPER_SNAKE constants | `U_CASE` | `DATA_FIELD`, `MIN_SHARD_SIZE_MB` |
 | Type parameters | Single uppercase letter | `T`, `K`, `V` |
 | Private helpers in objects | `camelCase` with `private` modifier | `private def parseJson(...)` |
 
@@ -203,7 +202,7 @@ the single-String constructor. Always use `Errors.analysisException()`.
 ### Scaladoc
 
 - **Class/object level:** required for all public types. Describe purpose,
-  not implementation. Cross-reference `SPECIFICATION.md §` sections for
+  not implementation. Cross-reference `format/SPECIFICATION.md` sections for
   architecture context.
 - **Method level:** required for public methods with non-obvious behaviour.
   Use `@param`, `@return`, `@throws`.
@@ -274,7 +273,7 @@ FileNotFoundError
 
 ## 5. Architectural Invariants
 
-These decisions must not be reversed without updating `SPECIFICATION.md`:
+These decisions must not be reversed without updating `format/SPECIFICATION.md`:
 
 | Invariant | Rationale |
 |-----------|-----------|
