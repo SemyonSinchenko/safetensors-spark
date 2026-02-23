@@ -1,3 +1,6 @@
+import sbtrelease.ReleaseStateTransformations._
+import xerial.sbt.Sonatype._
+
 // ---------------------------------------------------------------------------
 // safetensors-spark — Apache Spark DataSource V2 for Hugging Face safetensors
 // ---------------------------------------------------------------------------
@@ -18,17 +21,38 @@ val scalaVersionValue =
 // Extracts the first two version components, e.g. "4.0.1" -> "spark-4.0"
 val sparkShimDir = "spark-" + sparkVersion.split("\\.").take(2).mkString(".")
 
+// Artifact name suffix: "4.0", "4.1", etc.
+val sparkMinorVersion = sparkVersion.split("\\.").take(2).mkString(".")
+
 ThisBuild / scalaVersion := scalaVersionValue
 ThisBuild / organization := "io.github.semyonsinchenko"
 ThisBuild / version      := "0.1.0-SNAPSHOT"
 
+// ---- POM / Maven Central metadata (required by sbt-ci-release) ------------
+ThisBuild / homepage := Some(url("https://github.com/SemyonSinchenko/safetensors-spark"))
+ThisBuild / licenses := Seq("Apache-2.0" -> url("https://www.apache.org/licenses/LICENSE-2.0"))
+ThisBuild / scmInfo := Some(
+  ScmInfo(
+    browseUrl  = url("https://github.com/SemyonSinchenko/safetensors-spark"),
+    connection = "scm:git:git@github.com:SemyonSinchenko/safetensors-spark.git"
+  )
+)
+ThisBuild / developers := List(
+  Developer(
+    id    = "SemyonSinchenko",
+    name  = "Sem",
+    email = "ssinchenko@apache.org",
+    url   = url("https://github.com/SemyonSinchenko")
+  )
+)
+
 // ---- Project definition ----------------------------------------------------
 lazy val root = (project in file("."))
   .settings(
-    name := "safetensors-spark",
+    name := s"safetensors-spark-$sparkMinorVersion",
 
-    // Artifact coordinates: io.github.semyonsinchenko:safetensors-spark_2.13:<version>
-    moduleName := "safetensors-spark",
+    // Artifact coordinates: io.github.semyonsinchenko:safetensors-spark-4.1_2.13:<version>
+    moduleName := s"safetensors-spark-$sparkMinorVersion",
 
     // Java 11+ compatibility
     javacOptions ++= Seq("-source", "11", "-target", "11"),
@@ -59,9 +83,9 @@ lazy val root = (project in file("."))
       "com.fasterxml.jackson.module" %% "jackson-module-scala"     % "2.18.2" % Provided,
 
       // ---- Test dependencies -----------------------------------------------
-      "org.scalatest"  %% "scalatest"        % "3.2.19" % Test,
-      "org.apache.spark" %% "spark-core"     % sparkVersion % Test,
-      "org.apache.spark" %% "spark-sql"      % sparkVersion % Test,
+      "org.scalatest"    %% "scalatest"  % "3.2.19"     % Test,
+      "org.apache.spark" %% "spark-core" % sparkVersion % Test,
+      "org.apache.spark" %% "spark-sql"  % sparkVersion % Test,
     ),
 
     // ---- Test configuration -------------------------------------------------
