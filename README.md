@@ -192,23 +192,42 @@ training or batch inference.
 
 ## Quick Start
 
-### Reading safetensors files
+### Minimal example
 
-```python
-df = (
-    spark.read
-    .format("safetensors")
-    .option("inferSchema", "true")
-    .load("/data/tensors/")
+Write from PySpark:
+
+``` python
+import random
+rng = random.Random(42)
+
+rows = [
+    [rng.random() for _ in range(100)]
+    for _n in range(30)
+]
+
+df = spark.createDataFrame(rows, schema="array<double>")
+
+(
+	df
+	.write
+	.format("safetensors")
+	.mode("overwrite")
+	.option("dtype", "F32")
+	.option("batch_size", "15")
+	.save("test-data")
 )
-df.printSchema()
-# root
-#  |-- image: struct (nullable = false)
-#  |    |-- data:  binary    (nullable = false)
-#  |    |-- shape: array<int>(nullable = false)
-#  |    |-- dtype: string    (nullable = false)
-#  |-- label: struct (nullable = false)
-#  |    |-- ...
+```
+
+Read from safetensors:
+
+``` python
+with open("test-data/dataset_manifest.json", "r") as f_:
+    manifest = json.load(f_)
+
+first_file = manifest["shards"][0]["shard_path"]
+data = safe_open(f"test-data/{first_file}", "numpy")
+
+data.get_tensor("value")
 ```
 
 ### Writing safetensors files
