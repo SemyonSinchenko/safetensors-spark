@@ -1,6 +1,6 @@
 # Agent & Developer Quick Reference
 
-Quick reference for coding agents and developers working in this repository.
+Quick reference for coding agents working in this repository.
 
 **For user-facing API and usage examples see `README.md`.**
 **For format specification see `format/SPECIFICATION.md`.**
@@ -24,30 +24,27 @@ sbt "testOnly *SafetensorsDtypeSpec"
 # Single test case (substring match on description)
 sbt "testOnly *SafetensorsHeaderParserSpec -- -z 'parse a scalar'"
 
-# Different Spark version (Scala version inferred automatically)
+# Different Spark version
 sbt -DsparkVersion=4.0.1 test
 
-CI will fail if this fails)
-sbt scalafmt# Check formatting (Check
+# Check formatting (CI fails if this fails)
+sbt scalafmtCheck
 
 # Apply formatting
 sbt scalafmt
 
-# Build fat JAR tests
+# Build fat JAR (for cluster/integration tests)
 sbt assembly
-# Output: target/scala for cluster / integration-2.13/safetensors-spark-assembly-*.jar
+# Output: target/scala-2.13/safetensors-spark-assembly-*.jar
 ```
 
 ### Python integration tests (uv + pytest)
-
-The integration tests require the fat JAR. Build it with `sbt assembly` first,
-or point `SAFETENSORS_SPARK_JAR` at an existing JAR.
 
 ```bash
 # Install test dependencies
 uv sync --project tests/pyspark_interop
 
-# All integration tests
+# All integration tests (requires fat JAR)
 SAFETENSORS_SPARK_JAR=target/scala-2.13/safetensors-spark-assembly-*.jar \
   uv run --project tests/pyspark_interop pytest tests/pyspark_interop/
 
@@ -58,9 +55,6 @@ uv run --project tests/pyspark_interop \
 # Single test case
 uv run --project tests/pyspark_interop \
   pytest tests/pyspark_interop/test_python_to_spark.py::test_schema_matches_tensor_struct
-
-# Verbose output
-uv run --project tests/pyspark_interop pytest tests/pyspark_interop/ -v --tb=short
 ```
 
 ---
@@ -69,54 +63,18 @@ uv run --project tests/pyspark_interop pytest tests/pyspark_interop/ -v --tb=sho
 
 ```
 src/main/scala/io/github/semyonsinchenko/safetensors/
-  core/
-    SafetensorsDtype.scala          sealed enum of all valid dtypes (incl. BF16 special case)
-    TensorSchema.scala              canonical Tensor Struct definition and helpers
-    SafetensorsHeader.scala         SafetensorsHeader, TensorInfo, DataOffsets case classes
-    SafetensorsHeaderParser.scala   parse binary header from ByteBuffer → SafetensorsHeader
-    SafetensorsHeaderWriter.scala   build binary header from TensorDescriptor list → ByteBuffer
-  read/
-    SafetensorsScanBuilder.scala    ScanBuilder + pushdown + column pruning
-    SafetensorsScan.scala           Scan + Batch; plans InputPartitions
-    SafetensorsInputPartition.scala one file path = one partition
-    SafetensorsPartitionReaderFactory.scala
-    SafetensorsPartitionReader.scala mmap read; one row per file
-  write/
-    WriteOptions.scala              parse + validate all write options eagerly
-    SafetensorsWriteBuilder.scala   schema validation; produces SafetensorsBatchWrite
-    SafetensorsBatchWrite.scala     driver-side commit; writes manifest + index
-    SafetensorsDataWriterFactory.scala
-    SafetensorsDataWriter.scala     executor-side tensor encoding + shard rolling
-  expressions/
-    ArrToStExpression.scala         arr_to_st() Catalyst expression
-    StToArrayExpression.scala       st_to_array() Catalyst expression
-  manifest/
-    DatasetManifest.scala           DatasetManifest + ShardInfo case classes
-  mlflow/
-    SafetensorsDatasetSource.scala  JVM-side MLflow lineage utility
-  util/
-    Errors.scala                    Errors.analysisException() — Spark 4 compat helper
-  SafetensorsTable.scala            Table + SupportsRead + SupportsWrite
-  SafetensorsTableProvider.scala    TableProvider + DataSourceRegister ("safetensors")
-  SafetensorsExtensions.scala       SparkSessionExtensions — registers SQL functions
+  core/           # SafetensorsDtype, TensorSchema, Header parsing/writing
+  read/           # Spark read path: Scan, PartitionReader
+  write/          # Spark write path: WriteBuilder, DataWriter
+  expressions/    # SQL functions: arr_to_st(), st_to_array()
+  manifest/       # DatasetManifest for MLflow lineage
+  util/           # Errors helper for Spark 4 compatibility
+  SafetensorsTable.scala        # Table with SupportsRead/SupportsWrite
+  SafetensorsTableProvider.scala # DataSourceRegister ("safetensors")
 
-src/main/resources/META-INF/services/
-  org.apache.spark.sql.sources.DataSourceRegister   registers short name "safetensors"
-
-src/test/scala/io/github/semyonsinchenko/safetensors/
-  SafetensorsDtypeSpec.scala
-  SafetensorsHeaderParserSpec.scala
-  TensorSchemaSpec.scala
-
-python/safetensors_spark/
-  __init__.py
-  mlflow.py                         log_dataset() — pure Python, no Spark dependency
-
-tests/pyspark_interop/
-  conftest.py                       session-scoped SparkSession + JAR fixture
-  test_python_to_spark.py
-  test_spark_to_python.py
-  test_mlflow.py
+src/test/scala/  # Unit tests: *Spec.scala files
+python/safetensors_spark/  # Python utilities
+tests/pyspark_interop/      # Integration tests
 ```
 
 ---
@@ -124,163 +82,76 @@ tests/pyspark_interop/
 ## 3. Scala Code Style
 
 ### Formatting
+- Max line length: **100 columns**, indent: **2 spaces**
+- Enforced by `.scalafmt.conf` (`sbt scalafmtCheck` / `sbt scalafmt`)
+- Modifier order: `override`, `private/protected`, `implicit`, `final`, `sealed`, `abstract`, `lazy`
+- `-Xfatal-warnings` is active; all warnings are errors.
 
-Enforced by `.scalafmt.conf` (`sbt scalafmt` / `sbt scalafmtCheck`):
-- Max line length: **100 columns**
-- Indent: **2 spaces**
-- Rewrites: `RedundantBraces`, `SortModifiers` (modifier order: `override`,
-  `private/protected`, `implicit`, `final`, `sealed`, `abstract`, `lazy`)
-- Align tokens: `->`, `<-`, `=`, `:=` in their respective contexts
+### Import ordering (3 groups, blank line between)
+1. Project-internal, 2. Spark/Hadoop/Jackson (provided deps), 3. Java/Scala stdlib
 
-`-Xfatal-warnings` is active. All warnings are errors.
-
-### Import ordering
-
-Three groups, each separated by a blank line, in this order:
-
-```scala
-// 1. Project-internal
-import io.github.semyonsinchenko.safetensors.core.{SafetensorsDtype, TensorSchema}
-import io.github.semyonsinchenko.safetensors.util.Errors
-
-// 2. Spark / Hadoop / Jackson (provided dependencies)
-import org.apache.hadoop.fs.Path
-import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.types._
-
-// 3. Java / Scala stdlib
-import java.nio.{ByteBuffer, ByteOrder}
-import scala.jdk.CollectionConverters._
-```
-
-### Naming conventions
-
+### Naming
 | Construct | Convention | Example |
-|-----------|-----------|---------|
-| Classes, objects, traits | `PascalCase` | `SafetensorsTableProvider` |
-| Methods, `val`, `var`, parameters | `camelCase` | `headerSize`, `buildForBatch` |
-| Module-levelPPER_SNAKE constants | `U_CASE` | `DATA_FIELD`, `MIN_SHARD_SIZE_MB` |
-| Type parameters | Single uppercase letter | `T`, `K`, `V` |
-| Private helpers in objects | `camelCase` with `private` modifier | `private def parseJson(...)` |
+|-----------|------------|---------|
+| Classes, objects, traits | PascalCase | `SafetensorsTableProvider` |
+| Methods, val, var, parameters | camelCase | `headerSize`, `buildForBatch` |
+| Module-level constants | UPPER_SNAKE | `DATA_FIELD`, `MIN_SHARD_SIZE_MB` |
+| Type parameters | Single letter | `T`, `K`, `V` |
 
-### `null` and `Option`
-
-Never return or accept `null` in Scala code. Wrap Java APIs:
-
-```scala
-// correct
-Option(options.get("dtype")).map(...)
-
-// wrong — never do this
-val dtype = options.get("dtype")  // might be null
-```
-
-Use `Option[T]` in all Scala signatures. Use `None` / `getOrElse` / `fold`
-rather than `.isEmpty` / `.get`.
+### null and Option
+Never return `null`. Wrap Java APIs: `Option(opts.get("key")).map(...)`
+Use `Option[T]` in signatures; prefer `getOrElse` / `fold` over `.get`.
 
 ### Collections
-
-- Use `Seq[T]` (immutable) in all public signatures.
-- Use `Map[K, V]` (immutable) for mappings.
-- Use `Array[T]` only for JVM interop (`InternalRow`, `Array[Byte]`, Spark
-  partition arrays).
-- Prefer `.view.filterKeys(...).toMap` over `.filterKeys(...)` directly
-  (deprecated in 2.13).
+- Use `Seq[T]` (immutable) in public signatures
+- Use `Map[K, V]` (immutable) for mappings
+- Use `Array[T]` only for JVM interop (InternalRow, ByteBuffer, partitions)
 
 ### Error handling
-
 | Situation | Pattern |
 |-----------|---------|
-| Analysis-time (plan validation) | `throw Errors.analysisException(message)` |
-| Precondition / programming error | `require(cond, message)` or `throw new IllegalArgumentException(msg)` |
-| Expected failure with caller choice | Return `Either[String, T]` — see `SafetensorsDtype.fromString` |
-| Catching exceptions | `case NonFatal(e) =>` — never catch `Exception` or `Throwable` broadly |
+| Plan validation | `throw Errors.analysisException(msg)` |
+| Precondition | `require(cond, msg)` or `throw new IllegalArgumentException(msg)` |
+| Expected failure | Return `Either[String, T]` |
+| Catch exceptions | `case NonFatal(e) =>` |
 
-**Never** call `new AnalysisException(message)` directly — Spark 4 removed
-the single-String constructor. Always use `Errors.analysisException()`.
+**Never** call `new AnalysisException(msg)` directly — use `Errors.analysisException()`.
 
 ### Scaladoc
-
-- **Class/object level:** required for all public types. Describe purpose,
-  not implementation. Cross-reference `format/SPECIFICATION.md` sections for
-  architecture context.
-- **Method level:** required for public methods with non-obvious behaviour.
-  Use `@param`, `@return`, `@throws`.
-- **Private helpers:** inline `//` comments are sufficient.
-- Format: `/** ... */` (not `/* */`).
+- Required on all public types (describe purpose, not implementation)
+- Required on non-obvious public methods (use @param, @return, @throws)
+- Private helpers: inline `//` comments sufficient
+- Format: `/** ... */` (not `/* */`)
 
 ---
 
 ## 4. Python Code Style
-
-### Imports
-
 ```python
-from __future__ import annotations   # always first
-
-# stdlib
+from __future__ import annotations  # always first
 import json
-import os
 from pathlib import Path
 from typing import Optional
-
-# third-party (heavy imports deferred inside functions to avoid import-time failures)
-# import mlflow  ← inside function body, not at module level
+# third-party (defer heavy imports inside functions)
 ```
-
-### Type hints
-
-All public function signatures must carry type hints. Use `Optional[T]` (not
-`T | None`) for Python 3.10 compatibility.
-
-```python
-def log_dataset(
-    path: str,
-    run_id: Optional[str] = None,
-    name: str = "safetensors_dataset",
-) -> None:
-```
-
-### Docstrings
-
-NumPy style with `Parameters`, `Returns`, `Raises` sections:
-
-```python
-"""Short summary.
-
-Parameters
-----------
-path:
-    Description.
-run_id:
-    Description.
-
-Raises
-------
-FileNotFoundError
-    When the manifest is absent.
-"""
-```
-
-### Naming
-
-- Functions and variables: `snake_case`
-- Classes: `PascalCase`
-- Private helpers: `_leading_underscore`
-- Module-level constants: `UPPER_SNAKE_CASE`
+- All public functions need type hints (use `Optional[T]`, not `T | None`)
+- NumPy-style docstrings; naming: `snake_case` (functions), `PascalCase` (classes)
 
 ---
 
 ## 5. Architectural Invariants
 
-These decisions must not be reversed without updating `format/SPECIFICATION.md`:
-
 | Invariant | Rationale |
 |-----------|-----------|
-| BF16 is hardcoded as a valid dtype, bypassing the JSON schema regex | The schema pattern `([UIF])(8|16|32|64)` does not match `BF16`; this is a known quirk of the safetensors library. Every acceptance site must carry a `// NOTE: BF16 is not in the JSON schema regex` comment. |
-| `Errors.analysisException()` is the only way to create `AnalysisException` | Spark 4 removed the `AnalysisException(String)` constructor. Direct `new AnalysisException(message)` will not compile. |
-| Write path I/O goes through Hadoop `FileSystem` API | Required for HDFS, S3, GCS, Azure Blob compatibility. Never use `java.io.File` or `java.nio.file.Files` for output. |
-| One `.safetensors` file = one `InputPartition`; files are never split | The full header must be read before locating any tensor; mid-file splits are not possible. |
-| Tensor bytes must never be heap-copied as a staging buffer | Read path: slice `MappedByteBuffer`. Write path: `ByteBuffer.wrap(bytes)` directly. |
-| Schema and type validation belongs in `WriteBuilder.buildForBatch()` | Errors must surface at plan time, before any tasks are launched. `DataWriter.write()` must not perform schema validation. |
-| Global index file is `_tensor_index.parquet` | `_metadata.parquet` is reserved by Spark's partition discovery and must not be used. |
+| BF16 hardcoded as valid dtype | Not in JSON schema regex; every acceptance site needs comment |
+| Use `Errors.analysisException()` | Spark 4 removed single-String constructor |
+| Write I/O via Hadoop FileSystem | Required for HDFS/S3/GCS/Blob compatibility |
+| One .safetensors file = one InputPartition | Full header must be read first; no mid-file splits |
+| Tensor bytes never heap-copied | Read: slice MappedByteBuffer; Write: ByteBuffer.wrap(bytes) |
+| Schema validation in WriteBuilder.buildForBatch() | Errors at plan time, not task runtime |
+| Index file is `_tensor_index.parquet` | `_metadata.parquet` reserved by Spark |
+
+---
+
+## 6. No Cursor/Copilot Rules
+
+No `.cursor/rules/`, `.cursorrules`, or `.github/copilot-instructions.md` files found.
