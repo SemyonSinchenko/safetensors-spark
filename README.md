@@ -17,6 +17,53 @@
 
 ## Overview
 
+### The Big Picture
+
+`safetensors-spark` is a bridge between two worlds that rarely speak the same
+language natively:
+
+- **The Data Engineering world** — large-scale PySpark ETL pipelines running on
+  distributed clusters, processing terabytes of raw data (text, images, tabular
+  features, embeddings) into clean, structured datasets.
+- **The Deep Learning world** — distributed PyTorch training jobs that need to
+  consume those datasets as fast as possible, with minimal CPU overhead, so that
+  GPUs stay saturated.
+
+```mermaid
+flowchart LR
+    subgraph DE["🏭 Data Engineering"]
+        RAW["Raw Data\n(S3 / HDFS / GCS)"]
+        ETL["PySpark ETL\n(cleaning, tokenising,\nfeature extraction)"]
+        RAW --> ETL
+    end
+
+    subgraph Bridge["🌉 safetensors-spark"]
+        direction TB
+        WRITE["spark.write\n.format('safetensors')"]
+        FILES[".safetensors shards\n+ dataset_manifest.json"]
+        WRITE --> FILES
+    end
+
+    subgraph DL["🧠 Deep Learning"]
+        LOADER["PyTorch DataLoader\n(mmap, zero-copy)"]
+        TRAIN["Distributed Training\n(DDP / FSDP)"]
+        LOADER --> TRAIN
+    end
+
+    ETL -->|"primary use-case\n✅ complete & well-tested"| WRITE
+    FILES --> LOADER
+
+    READ["spark.read\n.format('safetensors')"]
+    FILES -.->|"secondary use-case\n⚠️ basic support"| READ
+```
+
+> **Primary direction: Spark → safetensors.**
+> Writing safetensors files from Spark is the main purpose of this project and is
+> complete, well-tested, and production-ready. Reading safetensors files back into
+> Spark is supported for convenience (e.g. validation, inspection, or feature
+> pipelines that consume pre-built tensors), but is a secondary use-case with more
+> limited functionality and less extensive test coverage.
+
 ### How Spark Rows Map to Safetensors Files
 
 The connector supports two write modes. In **Batch mode** every `batch_size` rows
