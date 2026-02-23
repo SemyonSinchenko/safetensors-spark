@@ -15,6 +15,26 @@
 
 ---
 
+## Table of Contents
+
+- [Overview](#overview)
+  - [The Big Picture](#the-big-picture)
+  - [How Spark Rows Map to Safetensors Files](#how-spark-rows-map-to-safetensors-files)
+  - [Generated Directory Structure](#generated-directory-structure)
+- [Motivation](#motivation)
+  - [Trade-offs vs Parquet / Arrow](#trade-offs-vs-parquet--arrow)
+  - [Two write modes](#two-write-modes)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+  - [Minimal example](#minimal-example)
+  - [Writing safetensors files](#writing-safetensors-files)
+- [Compatibility](#compatibility)
+- [Roadmap](#roadmap)
+- [Documentation](#documentation)
+- [Limitations & Known Caveats](#limitations--known-caveats)
+
+---
+
 ## Overview
 
 ### The Big Picture
@@ -174,16 +194,6 @@ training or batch inference.
 
 ---
 
-## Compatibility
-
-| Component    | Version      |
-| ------------ | ------------ |
-| Apache Spark | 4.0.x, 4.1.x |
-| Java         | 17+          |
-| Scala        | 2.13         |
-
----
-
 ## Installation
 
 > TBD
@@ -257,6 +267,16 @@ data.get_tensor("value")
     .save("/output/embeddings/")
 )
 ```
+
+---
+
+## Compatibility
+
+| Component    | Version      |
+| ------------ | ------------ |
+| Apache Spark | 4.0.x, 4.1.x |
+| Java         | 17+          |
+| Scala        | 2.13         |
 
 ---
 
