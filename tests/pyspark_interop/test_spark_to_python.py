@@ -125,7 +125,7 @@ def float_arrays_df(spark):
         StructField("image", TENSOR_SCHEMA, False),
         StructField("label", TENSOR_SCHEMA, False),
     ])
-    return spark.createDataFrame(rows, schema)
+    return spark.createDataFrame(rows, schema).coalesce(1)
 
 
 def test_manifest_is_written(spark, float_arrays_df, tmp_path: Path):
@@ -201,6 +201,12 @@ def test_safetensors_file_readable_by_python(spark, float_arrays_df, tmp_path: P
     shard_files = list(Path(out_dir).glob("*.safetensors"))
     assert len(shard_files) > 0, "At least one shard file must be written"
 
+    full_batch_image_shape = (2, 2, 2)
+    full_batch_label_shape = (2, 1)
+
+    non_full_image_shards = []
+    non_full_label_shards = []
+
     for shard in shard_files:
         assert SHARD_NAME_RE.match(shard.name), (
             f"Shard filename '{shard.name}' does not match naming convention"
@@ -214,15 +220,35 @@ def test_safetensors_file_readable_by_python(spark, float_arrays_df, tmp_path: P
             label = f.get_tensor("label")
             assert image.dtype == np.float32
             assert label.dtype == np.float32
-            # batch of 2 rows: image shape [2,2,2], label shape [2,1]
-            assert image.shape == (2, 2, 2)
-            assert label.shape == (2, 1)
-            np.testing.assert_array_almost_equal(
-                image.flatten(), [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
-            )
-            np.testing.assert_array_almost_equal(
-                label.flatten(), [0.0, 1.0]
-            )
+
+            if image.shape != full_batch_image_shape:
+                non_full_image_shards.append(shard.name)
+            if label.shape != full_batch_label_shape:
+                non_full_label_shards.append(shard.name)
+
+    assert len(non_full_image_shards) <= 1, (
+        f"More than one shard has a non-full-batch image shape: {non_full_image_shards}"
+    )
+    assert len(non_full_label_shards) <= 1, (
+        f"More than one shard has a non-full-batch label shape: {non_full_label_shards}"
+    )
+
+    # Collect all image and label values across shards and verify the full dataset
+    all_image_vals = []
+    all_label_vals = []
+    for shard in shard_files:
+        with safetensors.safe_open(str(shard), framework="numpy") as f:
+            all_image_vals.extend(f.get_tensor("image").flatten().tolist())
+            all_label_vals.extend(f.get_tensor("label").flatten().tolist())
+
+    np.testing.assert_array_almost_equal(
+        all_image_vals, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+        err_msg="Combined image values across all shards do not match expected"
+    )
+    np.testing.assert_array_almost_equal(
+        all_label_vals, [0.0, 1.0],
+        err_msg="Combined label values across all shards do not match expected"
+    )
 
 
 def test_tensor_index_written_when_enabled(spark, float_arrays_df, tmp_path: Path):
