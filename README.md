@@ -28,6 +28,11 @@
 - [Quick Start](#quick-start)
   - [Minimal example](#minimal-example)
   - [Writing safetensors files](#writing-safetensors-files)
+- [Write Options](#write-options)
+  - [Mode selection](#mode-selection)
+  - [Common options](#common-options)
+  - [Batch mode options](#batch-mode-options)
+  - [KV mode options](#kv-mode-options)
 - [Compatibility](#compatibility)
 - [Roadmap](#roadmap)
 - [Documentation](#documentation)
@@ -267,6 +272,52 @@ data.get_tensor("value")
     .save("/output/embeddings/")
 )
 ```
+
+---
+
+## Write Options
+
+All options are passed via `.option(key, value)` on the DataFrameWriter.
+Option names are **case-insensitive**.
+
+### Mode selection
+
+Exactly one of the following two options **must** be specified. They are mutually
+exclusive.
+
+| Option | Type | Description |
+| --- | --- | --- |
+| `batch_size` | `Int` (> 0) | **Batch mode.** Number of rows to stack into each output file. Every `batch_size` rows are concatenated along the leading tensor dimension and written as a single `.safetensors` file. |
+| `name_col` | `String` | **KV mode.** Name of the DataFrame column whose value is used as the tensor key prefix. All other (non-key) columns are written as individually named tensors per row. Files roll over at `target_shard_size_mb`. |
+
+### Common options
+
+These options are supported in **both** Batch mode and KV mode.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `dtype` | `String` | _(none)_ | Target dtype for all output tensors. Must be one of: `F16`, `F32`, `F64`, `BF16`, `U8`, `I8`, `U16`, `I16`, `U32`, `I32`, `U64`, `I64`. Required when the input columns are numeric arrays (`Array<T>`); optional when columns are already Tensor Structs (dtype is taken from the struct). |
+| `columns` | `String` | _(none — all columns)_ | Comma-separated list of column names to serialize as tensors. Columns not listed are ignored. When using KV mode the `name_col` column is always excluded from tensor output regardless of this setting. Example: `"image, label, weight"`. |
+| `shapes` | `String` (JSON) | `{}` | Per-column shape overrides as a JSON object mapping column name to a list of integers. The leading batch dimension is **not** included — it is inferred from `batch_size` or the number of rows in the shard. Example: `{"image": [3, 224, 224], "label": [1]}`. |
+| `duplicatesStrategy` | `String` | `fail` | How to handle duplicate tensor keys within a single output file. `fail` — throw an exception on the first duplicate (default). `lastWin` — silently overwrite with the last-seen value. |
+| `generate_index` | `Boolean` | `false` | When `true`, writes a `_tensor_index.parquet` file at the output root containing one row per tensor key with columns `tensor_key`, `file_name`, `shape`, and `dtype`. Useful for downstream random-access lookups. |
+| `kv_separator` | `String` | `__` | Separator string inserted between the `name_col` value and the column name when constructing tensor keys in KV mode. For example, with `name_col=user_id`, `kv_separator=/`, and a column named `emb`, the tensor key becomes `alice/emb`. Also accepted in Batch mode (has no effect there). |
+
+### Batch mode options
+
+These options are only meaningful when `batch_size` is set.
+
+| Option | Type | Default | Valid values | Description |
+| --- | --- | --- | --- | --- |
+| `tail_strategy` | `String` | `write` | `write`, `drop`, `pad` | Controls what happens to the final batch when the number of remaining rows is less than `batch_size`. `write` — write the partial batch as-is (leading dimension will be smaller than `batch_size`). `drop` — discard the partial batch entirely. `pad` — pad the partial batch with zeros up to `batch_size`. |
+
+### KV mode options
+
+These options are only meaningful when `name_col` is set.
+
+| Option | Type | Default | Valid values | Description |
+| --- | --- | --- | --- | --- |
+| `target_shard_size_mb` | `Int` | `300` | `50` – `1000` | Approximate target size in megabytes for each output shard file. A new shard is started when the accumulated tensor bytes for the current shard exceed this threshold. Must be between 50 and 1000 (inclusive). |
 
 ---
 
