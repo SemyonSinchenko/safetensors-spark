@@ -2,12 +2,8 @@
 
 <img src="/static/safetensors_spark_logo.png" alt="Safetensors Spark Logo"/>
 
-**Safetensors Spark**
-
-Apache Spark Native Safetensors DataSource
-
 </div>
-
+[![CI](https://github.com/SemyonSinchenko/safetensors-spark/actions/workflows/ci.yml/badge.svg)](https://github.com/SemyonSinchenko/safetensors-spark/actions/workflows/ci.yml) [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 ---
 
 ## Motivation
