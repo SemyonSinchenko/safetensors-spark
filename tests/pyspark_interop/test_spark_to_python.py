@@ -58,6 +58,56 @@ def make_f32_bytes(vals: list[float]) -> bytes:
     return struct.pack(f"<{len(vals)}f", *vals)
 
 
+def f32_to_f16_truncate(f32_array: np.ndarray) -> np.ndarray:
+    """
+    Truncate (round-toward-zero) F32 → F16, matching the JVM implementation.
+
+    NumPy's .astype(np.float16) uses round-to-nearest-even, which differs from
+    the truncation used in the Scala/JVM writer. This function replicates the
+    JVM truncation by zeroing the low mantissa bits before casting, so that
+    round-trip comparisons are apples-to-apples.
+    """
+    bits = f32_array.view(np.uint32)
+    sign    = (bits >> 31) & 0x1
+    exp32   = (bits >> 23) & 0xff
+    mant32  = bits & 0x7fffff
+
+    result = np.zeros(f32_array.shape, dtype=np.uint16)
+
+    # Inf or NaN
+    inf_nan = exp32 == 0xff
+    result[inf_nan] = (
+        (sign[inf_nan].astype(np.uint16) << 15)
+        | np.uint16(0x7c00)
+        | np.where(mant32[inf_nan] != 0, np.uint16(0x200), np.uint16(0))
+    )
+
+    # Zero / denormal (exp32 == 0) → flush to signed zero
+    zero = exp32 == 0
+    result[zero] = (sign[zero].astype(np.uint16) << 15)
+
+    # Normal range
+    normal = ~inf_nan & ~zero
+    exp16 = exp32[normal].astype(np.int32) - 127 + 15
+    underflow = exp16 <= 0
+    overflow  = exp16 >= 31
+
+    exp16_clipped = np.clip(exp16, 0, 30).astype(np.uint16)
+    mant16 = (mant32[normal] >> 13).astype(np.uint16)  # truncate low 13 bits
+
+    normal_result = (
+        (sign[normal].astype(np.uint16) << 15)
+        | (exp16_clipped << 10)
+        | mant16
+    )
+    # underflow → zero; overflow → inf
+    normal_result[underflow] = (sign[normal][underflow].astype(np.uint16) << 15)
+    normal_result[overflow]  = (sign[normal][overflow].astype(np.uint16) << 15) | np.uint16(0x7c00)
+
+    result[normal] = normal_result
+    return result.view(np.float16)
+
+
 @pytest.fixture()
 def float_arrays_df(spark):
     """A simple PySpark DataFrame with two float array columns (Tensor Struct format)."""
@@ -934,14 +984,23 @@ def test_random_f32_array_round_trip(spark, tmp_path: Path):
 
 
 def test_random_f16_array_round_trip(spark, tmp_path: Path):
-    """Random F16 arrays must survive arr_to_st → Spark write → safetensors read with ≤1 ULP error."""
+    """Random F16 arrays must survive arr_to_st → Spark write → safetensors read.
+
+    The JVM writer uses truncation (round-toward-zero) rather than NumPy's
+    default round-to-nearest-even when converting F32 → F16.  We therefore
+    compute the expected values with the same truncation logic and allow a
+    small absolute tolerance (one F16 epsilon, ~0.001) to absorb any residual
+    platform differences across OS / JVM / NumPy versions.
+    """
     rng = np.random.default_rng(7)
     NUM_ROWS   = 10
     ELEM_COUNT = 8
 
     # Generate values in a range that F16 can represent without overflow
     source_f32 = rng.uniform(-10.0, 10.0, (NUM_ROWS, ELEM_COUNT)).astype(np.float32)
-    source_f16 = source_f32.astype(np.float16)
+
+    # Expected values: apply the same truncation the JVM writer uses
+    expected_f16 = f32_to_f16_truncate(source_f32)
 
     rows = [Row(floats=source_f32[i].tolist()) for i in range(NUM_ROWS)]
     df_raw = spark.createDataFrame(
@@ -970,14 +1029,17 @@ def test_random_f16_array_round_trip(spark, tmp_path: Path):
 
     assert t.dtype == np.float16
     assert t.shape == (NUM_ROWS, ELEM_COUNT)
-    # Truncation (not round-to-nearest-even) may differ by at most 1 ULP from
-    # a proper F16 cast; allow atol of one F16 epsilon (~0.001)
+
+    # Compare against truncation-based expected values with one F16 epsilon of slack
     np.testing.assert_allclose(
         t.astype(np.float32),
-        source_f16.astype(np.float32),
+        expected_f16.astype(np.float32),
         rtol=0,
         atol=float(np.finfo(np.float16).eps),
-        err_msg="F16 round-trip: truncation error exceeds 1 ULP",
+        err_msg=(
+            "F16 round-trip: output differs from JVM truncation result by more than "
+            "one F16 epsilon. This may indicate a rounding-mode mismatch."
+        ),
     )
 
 
