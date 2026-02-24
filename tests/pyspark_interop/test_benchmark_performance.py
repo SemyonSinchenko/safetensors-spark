@@ -68,7 +68,9 @@ def test_safetensors_write_speed(benchmark, spark, tmp_path: Path, n_rows: int):
     output_path = tmp_path / "safetensors_output"
     
     def write_safetensors():
-        df.write.format("safetensors").mode("overwrite").save(str(output_path))
+        df.write.format("safetensors").option(
+            "batch_size", "500"
+        ).mode("overwrite").save(str(output_path))
         # Force filesystem sync
         return _get_total_size(output_path)
     
@@ -143,7 +145,9 @@ def test_safetensors_multi_column_write(benchmark, spark, tmp_path: Path, n_cols
     output_path = tmp_path / f"safetensors_{n_cols}cols"
     
     def write_multi_col():
-        df.write.format("safetensors").mode("overwrite").save(str(output_path))
+        df.write.format("safetensors").format("safetensors").option(
+            "batch_size", "500"
+        ).mode("overwrite").save(str(output_path))
         return _get_total_size(output_path)
     
     result = benchmark(write_multi_col)
@@ -213,7 +217,9 @@ def test_file_size_comparison(spark, tmp_path: Path):
     
     # Write safetensors
     st_path = tmp_path / "size_test_safetensors"
-    df.write.format("safetensors").mode("overwrite").save(str(st_path))
+    df.write.format("safetensors").option(
+            "batch_size", "500"
+    ).mode("overwrite").save(str(st_path))
     st_size = _get_total_size(st_path)
     
     # Write Parquet
