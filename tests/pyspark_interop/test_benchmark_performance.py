@@ -7,6 +7,9 @@ Benchmarks measure:
   - Read-back latency
 
 Uses pytest-benchmark for statistical rigor and comparison.
+
+Set the environment variable RUN_BENCHMARKS=1 to run these benchmarks.
+They are skipped by default so they do not run in CI.
 """
 
 from __future__ import annotations
@@ -19,6 +22,10 @@ from typing import Any
 
 import numpy as np
 import pytest
+
+
+_RUN_BENCHMARKS = os.environ.get("RUN_BENCHMARKS", "0") == "1"
+_SKIP_REASON = "Set RUN_BENCHMARKS=1 to run performance benchmarks"
 
 
 def _get_total_size(path: Path) -> int:
@@ -46,6 +53,7 @@ def _generate_tensor_data(n_rows: int, n_cols: int, dtype: str = "float32") -> d
 # Benchmark 4.2: Parquet baseline comparison
 # -----------------------------------------------------------------------------
 
+@pytest.mark.skipif(not _RUN_BENCHMARKS, reason=_SKIP_REASON)
 @pytest.mark.benchmark(
     group="write_comparison",
     min_rounds=3,
@@ -83,6 +91,7 @@ def test_safetensors_write_speed(benchmark, spark, tmp_path: Path, n_rows: int):
     benchmark.extra_info["throughput_rows_per_sec"] = n_rows / benchmark.stats["mean"]
 
 
+@pytest.mark.skipif(not _RUN_BENCHMARKS, reason=_SKIP_REASON)
 @pytest.mark.benchmark(
     group="write_comparison",
     min_rounds=3,
@@ -120,6 +129,7 @@ def test_parquet_write_speed(benchmark, spark, tmp_path: Path, n_rows: int):
 # Benchmark 4.3: Multi-column benchmark
 # -----------------------------------------------------------------------------
 
+@pytest.mark.skipif(not _RUN_BENCHMARKS, reason=_SKIP_REASON)
 @pytest.mark.benchmark(
     group="multi_column",
     min_rounds=3,
@@ -158,6 +168,7 @@ def test_safetensors_multi_column_write(benchmark, spark, tmp_path: Path, n_cols
     benchmark.extra_info["file_size_bytes"] = result
 
 
+@pytest.mark.skipif(not _RUN_BENCHMARKS, reason=_SKIP_REASON)
 @pytest.mark.benchmark(
     group="multi_column",
     min_rounds=3,
@@ -198,6 +209,7 @@ def test_parquet_multi_column_write(benchmark, spark, tmp_path: Path, n_cols: in
 # Benchmark 4.4 & 4.5: File size comparison
 # -----------------------------------------------------------------------------
 
+@pytest.mark.skipif(not _RUN_BENCHMARKS, reason=_SKIP_REASON)
 def test_file_size_comparison(spark, tmp_path: Path):
     """Compare file sizes between safetensors and Parquet for identical data."""
     n_rows = 100000
