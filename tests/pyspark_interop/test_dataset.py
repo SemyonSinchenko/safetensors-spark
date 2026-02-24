@@ -9,7 +9,6 @@ See §5.3 of AGENTS.md.
 
 from __future__ import annotations
 
-import json
 import struct
 from pathlib import Path
 
@@ -29,11 +28,13 @@ def written_dataset(spark, tmp_path: Path):
         StructType,
     )
 
-    tensor_schema = StructType([
-        StructField("data", BinaryType(), False),
-        StructField("shape", ArrayType(IntegerType(), False), False),
-        StructField("dtype", StringType(), False),
-    ])
+    tensor_schema = StructType(
+        [
+            StructField("data", BinaryType(), False),
+            StructField("shape", ArrayType(IntegerType(), False), False),
+            StructField("dtype", StringType(), False),
+        ]
+    )
 
     def f32(vals):
         return struct.pack(f"<{len(vals)}f", *vals)
@@ -50,8 +51,7 @@ def written_dataset(spark, tmp_path: Path):
     out_dir = str(tmp_path / "dataset_test")
 
     (
-        df.write
-        .format("safetensors")
+        df.write.format("safetensors")
         .option("batch_size", "3")
         .option("dtype", "F32")
         .mode("overwrite")
@@ -149,8 +149,9 @@ def test_dataset_assign_shards_balance(written_dataset):
     ]
     # Allows for imbalance due to shard size boundaries
     max_diff = max(worker_samples) - min(worker_samples)
-    assert max_diff <= max(1, max(worker_samples) // 4), \
+    assert max_diff <= max(1, max(worker_samples) // 4), (
         f"Balance strategy should distribute fairly, got {worker_samples}"
+    )
 
 
 def test_dataset_assign_shards_invalid_strategy(written_dataset):
@@ -268,4 +269,5 @@ def test_dataset_get_index(written_dataset):
     # If present, it should be a pyarrow.Table
     if index is not None:
         import pyarrow as pa
+
         assert isinstance(index, pa.Table)

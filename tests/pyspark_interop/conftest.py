@@ -49,6 +49,7 @@ def _find_connector_jar() -> str:
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(scope="session")
 def jar_path() -> str:
     return _find_connector_jar()
@@ -60,8 +61,7 @@ def spark(jar_path):
     from pyspark.sql import SparkSession
 
     session = (
-        SparkSession.builder
-        .master("local[2]")
+        SparkSession.builder.master("local[2]")
         .appName("safetensors-spark-tests")
         .config("spark.jars", jar_path)
         .config(

@@ -154,6 +154,10 @@ class SafetensorsDataWriter(
 
   /** Flush the current batchBuffer as one complete, self-contained safetensors file.
     *
+    * Uses two passes over the buffer:
+    *   - Pass 1: compute byte lengths per column (no encoding) to build descriptors and the header.
+    *   - Pass 2: encode and stream each column's data row by row — no large concat allocation.
+    *
     * Each call to flushBatch() opens a new shard file, writes a valid safetensors binary (8-byte
     * header-length prefix + JSON header + tensor data), and closes the stream immediately. The file
     * is therefore always a valid, standalone safetensors file.
@@ -163,62 +167,100 @@ class SafetensorsDataWriter(
 
     val batchSize = batchBuffer.size
 
-    val tensors: Seq[(TensorDescriptor, Array[Byte])] = columnsToWrite.map {
+    // Resolve dtype and per-sample shape for each column (needed for both passes)
+    val columnMeta: Seq[(String, Int, DataType, SafetensorsDtype, Seq[Int])] = columnsToWrite.map {
       case (colName, colIdx, colType) =>
         val dtype = options.dtype.getOrElse {
           colType match {
             case st: StructType if TensorSchema.isTensorStruct(st) =>
-              val firstRow = batchBuffer.head
-              val struct   = firstRow.getStruct(colIdx, 3)
-              SafetensorsDtype.fromStringUnsafe(struct.getUTF8String(2).toString)
+              SafetensorsDtype.fromStringUnsafe(
+                batchBuffer.head.getStruct(colIdx, 3).getUTF8String(2).toString
+              )
             case _ =>
               throw new IllegalStateException(
                 s"dtype option is required for numeric array column '$colName'"
               )
           }
         }
-
-        val (perSampleShape, rawBytes) = colType match {
+        val perSampleShape = colType match {
           case st: StructType if TensorSchema.isTensorStruct(st) =>
-            val byteArrays = batchBuffer.map { row =>
-              row.getStruct(colIdx, 3).getBinary(0)
-            }.toArray
-
-            val firstStruct = batchBuffer.head.getStruct(colIdx, 3)
-            val shapeArr    = firstStruct.getArray(1)
-            val perSample   = (0 until shapeArr.numElements()).map(i => shapeArr.getInt(i))
-
-            val combined = concatByteArrays(byteArrays)
-            (perSample, combined)
-
-          case at: ArrayType if TensorSchema.isNumericArrayType(at) =>
-            val byteArrays = batchBuffer.map { row =>
-              val arr = row.getArray(colIdx)
-              encodeNumericArray(arr, at.elementType, dtype)
-            }.toArray
-
-            val perSample = options.shapes.get(colName) match {
+            val shapeArr = batchBuffer.head.getStruct(colIdx, 3).getArray(1)
+            (0 until shapeArr.numElements()).map(i => shapeArr.getInt(i))
+          case _: ArrayType =>
+            options.shapes.get(colName) match {
               case Some(s) => s
-              case None =>
-                val n = batchBuffer.head.getArray(colIdx).numElements()
-                Seq(n)
+              case None    => Seq(batchBuffer.head.getArray(colIdx).numElements())
             }
-
-            val combined = concatByteArrays(byteArrays)
-            (perSample, combined)
-
           case other =>
             throw new IllegalStateException(
               s"Unexpected column type for '$colName': ${other.simpleString}"
             )
         }
-
-        val fullShape  = Seq(batchSize) ++ perSampleShape
-        val descriptor = TensorDescriptor(colName, dtype, fullShape, rawBytes.length.toLong)
-        (descriptor, rawBytes)
+        (colName, colIdx, colType, dtype, perSampleShape)
     }
 
-    writeShardFile(tensors, batchSize)
+    // Pass 1: compute byte lengths per column (no encoding) to build descriptors
+    val descriptors: Seq[TensorDescriptor] = columnMeta.map {
+      case (colName, colIdx, colType, dtype, perSampleShape) =>
+        val totalBytes =
+          batchBuffer.map(row => computeTensorByteLength(row, colIdx, colType, dtype)).sum
+        TensorDescriptor(colName, dtype, Seq(batchSize) ++ perSampleShape, totalBytes)
+    }
+
+    val fileName = f"part-${taskId}%05d-${shardIndex}%04d-$taskUuid.safetensors"
+    val filePath = new Path(outputPath, fileName).toString
+    val fs       = new Path(filePath).getFileSystem(hadoopConf)
+    val stream   = fs.create(new Path(filePath))
+    openedShardPaths += filePath
+
+    try {
+      // Write header
+      val headerBuf   = SafetensorsHeaderWriter.buildHeader(descriptors)
+      val headerBytes = headerBuf.remaining()
+      val headerArr   = new Array[Byte](headerBytes)
+      headerBuf.get(headerArr)
+      stream.write(headerArr)
+
+      // Pass 2: encode and stream each column's data row by row — no concat allocation
+      columnMeta.foreach { case (colName, colIdx, colType, dtype, _) =>
+        batchBuffer.foreach { row =>
+          val bytes = colType match {
+            case st: StructType if TensorSchema.isTensorStruct(st) =>
+              row.getStruct(colIdx, 3).getBinary(0)
+            case at: ArrayType if TensorSchema.isNumericArrayType(at) =>
+              encodeNumericArray(row.getArray(colIdx), at.elementType, dtype)
+            case other =>
+              throw new IllegalStateException(
+                s"Unexpected column type for '$colName': ${other.simpleString}"
+              )
+          }
+          stream.write(bytes)
+        }
+      }
+
+      // Collect index entries
+      descriptors.foreach { desc =>
+        indexEntries += TensorIndexEntry(
+          tensorKey = desc.name,
+          fileName = fileName,
+          shape = desc.shape,
+          dtype = desc.dtype.name
+        )
+      }
+
+      val totalBytes = headerBytes.toLong + descriptors.map(_.byteLength).sum
+      stream.flush()
+      stream.close()
+
+      shards += ShardInfo(shardPath = fileName, samplesCount = batchSize, bytes = totalBytes)
+    } catch {
+      case e: Exception =>
+        try stream.close()
+        catch { case _: Exception => () }
+        throw e
+    }
+
+    shardIndex += 1
     batchBuffer.clear()
   }
 
@@ -294,7 +336,10 @@ class SafetensorsDataWriter(
     new GenericInternalRow(fields.asInstanceOf[Array[Any]])
   }
 
-  /** Write tensors to a new, self-contained shard file and close the stream immediately. */
+  /** Write tensors to a new, self-contained shard file and close the stream immediately.
+    *
+    * Used exclusively by KV mode where tensors are already fully materialised as Array[Byte].
+    */
   private def writeShardFile(
       tensors: Seq[(TensorDescriptor, Array[Byte])],
       samplesInBatch: Int
@@ -456,6 +501,25 @@ class SafetensorsDataWriter(
   // Private helpers — encoding
   // ---------------------------------------------------------------------------
 
+  /** Compute the byte length a tensor column would produce for a given row, without encoding.
+    *
+    * Used in Pass 1 of flushBatch() to build TensorDescriptors before any data is written.
+    */
+  private def computeTensorByteLength(
+      row: InternalRow,
+      colIdx: Int,
+      colType: DataType,
+      dtype: SafetensorsDtype
+  ): Long =
+    colType match {
+      case st: StructType if TensorSchema.isTensorStruct(st) =>
+        row.getStruct(colIdx, 3).getBinary(0).length.toLong
+      case at: ArrayType if TensorSchema.isNumericArrayType(at) =>
+        row.getArray(colIdx).numElements().toLong * SafetensorsDtype.bytesPerElement(dtype)
+      case other =>
+        throw new IllegalStateException(s"Unexpected column type: ${other.simpleString}")
+    }
+
   /** Encode a numeric InternalRow ArrayData to raw little-endian bytes in the target safetensors
     * dtype.
     */
@@ -529,18 +593,6 @@ class SafetensorsDataWriter(
       else if (exp16 <= 0) (sign << 15).toShort
       else ((sign << 15) | (exp16 << 10) | (mant32 >>> 13)).toShort
     }
-  }
-
-  /** Concatenate a sequence of byte arrays into a single array. */
-  private def concatByteArrays(arrays: Array[Array[Byte]]): Array[Byte] = {
-    val totalLen = arrays.map(_.length.toLong).sum
-    val result   = new Array[Byte](totalLen.toInt)
-    var pos      = 0
-    arrays.foreach { a =>
-      System.arraycopy(a, 0, result, pos, a.length)
-      pos += a.length
-    }
-    result
   }
 
 }

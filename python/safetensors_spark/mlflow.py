@@ -19,6 +19,7 @@ from typing import Optional
 def _get_dataset_source_base():
     """Lazily import DatasetSource to avoid hard dependency on mlflow."""
     from mlflow.data.dataset_source import DatasetSource
+
     return DatasetSource
 
 
@@ -57,10 +58,10 @@ def log_dataset(
         If no active MLflow run exists and ``run_id`` is not provided.
     """
     import mlflow
-    from mlflow.data.dataset_source import DatasetSource
 
     if filesystem is None:
         import pyarrow.fs
+
         filesystem = pyarrow.fs.LocalFileSystem()
 
     manifest_path = f"{path}/dataset_manifest.json"

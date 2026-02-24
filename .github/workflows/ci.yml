@@ -138,6 +138,11 @@ jobs:
       - name: Install PySpark test dependencies
         run: uv sync --project tests/pyspark_interop
 
+      - name: Lint and format check Python (ruff)
+        run: |
+          uv run --project tests/pyspark_interop ruff format --check tests/pyspark_interop
+          uv run --project tests/pyspark_interop ruff check tests/pyspark_interop
+
       - name: Run PySpark integration tests
         env:
           SPARK_VERSION: ${{ matrix.spark_version }}
