@@ -13,6 +13,7 @@ dependencies = [
     "pytest>=8.0",
     "pytest-timeout>=2.3",
     "pytest-benchmark>=4.0",
+    "ruff",
 ]
 
 [tool.pytest.ini_options]

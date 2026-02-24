@@ -21,14 +21,21 @@ def written_dataset(spark, tmp_path: Path):
     """Write a small safetensors dataset and return the output path."""
     from pyspark.sql import Row
     from pyspark.sql.types import (
-        ArrayType, BinaryType, IntegerType, StringType, StructField, StructType
+        ArrayType,
+        BinaryType,
+        IntegerType,
+        StringType,
+        StructField,
+        StructType,
     )
 
-    tensor_schema = StructType([
-        StructField("data",  BinaryType(),                     False),
-        StructField("shape", ArrayType(IntegerType(), False),  False),
-        StructField("dtype", StringType(),                     False),
-    ])
+    tensor_schema = StructType(
+        [
+            StructField("data", BinaryType(), False),
+            StructField("shape", ArrayType(IntegerType(), False), False),
+            StructField("dtype", StringType(), False),
+        ]
+    )
 
     def f32(vals):
         return struct.pack(f"<{len(vals)}f", *vals)
@@ -45,8 +52,7 @@ def written_dataset(spark, tmp_path: Path):
     out_dir = str(tmp_path / "mlflow_dataset")
 
     (
-        df.write
-        .format("safetensors")
+        df.write.format("safetensors")
         .option("batch_size", "3")
         .option("dtype", "F32")
         .mode("overwrite")
@@ -60,7 +66,6 @@ def test_log_dataset_adds_input_to_run(written_dataset):
     """log_dataset() must add a dataset input to the active MLflow run."""
     import mlflow
     import sys
-    import os
 
     # Add the Python package to the path
     repo_root = Path(__file__).parent.parent.parent
@@ -75,8 +80,9 @@ def test_log_dataset_adds_input_to_run(written_dataset):
 
     finished_run = mlflow.get_run(run_id)
     dataset_inputs = finished_run.inputs.dataset_inputs
-    assert len(dataset_inputs) == 1, \
+    assert len(dataset_inputs) == 1, (
         f"Expected 1 dataset input, got {len(dataset_inputs)}"
+    )
 
 
 def test_log_dataset_manifest_contents(written_dataset):
@@ -150,6 +156,7 @@ def test_log_dataset_raises_without_run(written_dataset):
 
     # Ensure no active run
     import mlflow
+
     if mlflow.active_run():
         mlflow.end_run()
 

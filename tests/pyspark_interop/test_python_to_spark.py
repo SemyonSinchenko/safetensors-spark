@@ -27,7 +27,7 @@ def simple_safetensors_file(tmp_path: Path) -> tuple[Path, dict]:
 
     arrays = {
         "weight": np.random.rand(3, 4).astype(np.float32),
-        "bias":   np.random.rand(4).astype(np.float32),
+        "bias": np.random.rand(4).astype(np.float32),
     }
     out_file = tmp_path / "test.safetensors"
     save_file(arrays, str(out_file))
@@ -44,16 +44,18 @@ def test_schema_matches_tensor_struct(spark, simple_safetensors_file):
         .load(str(file_path))
     )
 
-    from pyspark.sql.types import BinaryType, ArrayType, IntegerType, StringType, StructType
+    from pyspark.sql.types import BinaryType, ArrayType, StringType, StructType
 
     for tensor_name in arrays:
-        assert tensor_name in df.schema.fieldNames(), \
+        assert tensor_name in df.schema.fieldNames(), (
             f"Expected column '{tensor_name}' in schema"
+        )
         field = df.schema[tensor_name]
-        assert isinstance(field.dataType, StructType), \
+        assert isinstance(field.dataType, StructType), (
             f"Column '{tensor_name}' should be StructType"
+        )
         sub_fields = {f.name: f.dataType for f in field.dataType.fields}
-        assert "data"  in sub_fields and isinstance(sub_fields["data"],  BinaryType)
+        assert "data" in sub_fields and isinstance(sub_fields["data"], BinaryType)
         assert "shape" in sub_fields and isinstance(sub_fields["shape"], ArrayType)
         assert "dtype" in sub_fields and isinstance(sub_fields["dtype"], StringType)
 
@@ -73,7 +75,9 @@ def test_decoded_values_match_numpy(spark, simple_safetensors_file):
 
     for tensor_name, np_array in arrays.items():
         # Use st_to_array() to decode the tensor struct (exercises Catalyst expression)
-        result_df = spark.sql(f"SELECT st_to_array({tensor_name}) as decoded FROM safetensors_data")
+        result_df = spark.sql(
+            f"SELECT st_to_array({tensor_name}) as decoded FROM safetensors_data"
+        )
         rows = result_df.collect()
         assert len(rows) == 1, "Each safetensors file should produce exactly one row"
 
@@ -89,7 +93,9 @@ def test_decoded_values_match_numpy(spark, simple_safetensors_file):
         )
 
 
-def _build_safetensors_bytes(tensor_name: str, dtype_str: str, shape: list, raw_bytes: bytes) -> bytes:
+def _build_safetensors_bytes(
+    tensor_name: str, dtype_str: str, shape: list, raw_bytes: bytes
+) -> bytes:
     """
     Hand-craft a minimal safetensors binary without any Python library dependency.
 
@@ -109,7 +115,7 @@ def _build_safetensors_bytes(tensor_name: str, dtype_str: str, shape: list, raw_
         }
     }
     header_json = _json.dumps(header_obj).encode("utf-8")
-    header_len  = len(header_json)
+    header_len = len(header_json)
 
     import struct as _struct
 
@@ -123,16 +129,13 @@ def test_bf16_dtype_preserved(spark, tmp_path: Path):
     We craft the .safetensors binary manually to avoid requiring torch.bfloat16.
     The three known BF16 bit patterns represent 1.0, 2.0, and 3.0.
     """
-    import struct
 
     # BF16 values: 1.0 = 0x3F80, 2.0 = 0x4000, 3.0 = 0x4040 (LE 16-bit each)
     bf16_values = [0x3F80, 0x4000, 0x4040]
-    raw_bytes   = struct.pack("<3H", *bf16_values)  # 6 bytes total
+    raw_bytes = struct.pack("<3H", *bf16_values)  # 6 bytes total
 
     file_path = tmp_path / "bf16_test.safetensors"
-    file_path.write_bytes(
-        _build_safetensors_bytes("embedding", "BF16", [3], raw_bytes)
-    )
+    file_path.write_bytes(_build_safetensors_bytes("embedding", "BF16", [3], raw_bytes))
 
     df = (
         spark.read.format("safetensors")

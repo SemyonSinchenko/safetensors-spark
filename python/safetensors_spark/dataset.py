@@ -14,7 +14,6 @@ from __future__ import annotations
 import heapq
 import json
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass
@@ -65,6 +64,7 @@ class DistributedSafetensorsDataset:
 
         if self._filesystem is None:
             import pyarrow.fs
+
             self._filesystem = pyarrow.fs.LocalFileSystem()
 
     @classmethod
@@ -92,6 +92,7 @@ class DistributedSafetensorsDataset:
         """
         if filesystem is None:
             import pyarrow.fs
+
             filesystem = pyarrow.fs.LocalFileSystem()
 
         manifest_path = f"{path}/dataset_manifest.json"
@@ -119,6 +120,7 @@ class DistributedSafetensorsDataset:
             file_info = filesystem.get_file_info(index_path)
             if file_info.is_file:
                 import pyarrow.parquet
+
                 with filesystem.open_input_file(index_path) as f:
                     index_table = pyarrow.parquet.read_table(f)
         except Exception:

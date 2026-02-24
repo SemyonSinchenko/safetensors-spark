@@ -16,9 +16,7 @@ from __future__ import annotations
 
 import json
 import os
-import time
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import pytest
@@ -53,6 +51,7 @@ def _generate_tensor_data(n_rows: int, n_cols: int, dtype: str = "float32") -> d
 # Benchmark 4.2: Parquet baseline comparison
 # -----------------------------------------------------------------------------
 
+
 @pytest.mark.skipif(not _RUN_BENCHMARKS, reason=_SKIP_REASON)
 @pytest.mark.benchmark(
     group="write_comparison",
@@ -65,25 +64,22 @@ def test_safetensors_write_speed(benchmark, spark, tmp_path: Path, n_rows: int):
     """Benchmark safetensors write performance for varying data sizes."""
     # Generate test data
     data = _generate_tensor_data(n_rows, 1)
-    
+
     # Create DataFrame
-    rows = [
-        {f"tensor_0": data["tensor_0"][i].tobytes()}
-        for i in range(n_rows)
-    ]
+    rows = [{"tensor_0": data["tensor_0"][i].tobytes()} for i in range(n_rows)]
     df = spark.createDataFrame(rows)
-    
+
     output_path = tmp_path / "safetensors_output"
-    
+
     def write_safetensors():
-        df.write.format("safetensors").option(
-            "batch_size", "500"
-        ).mode("overwrite").save(str(output_path))
+        df.write.format("safetensors").option("batch_size", "500").mode(
+            "overwrite"
+        ).save(str(output_path))
         # Force filesystem sync
         return _get_total_size(output_path)
-    
+
     result = benchmark(write_safetensors)
-    
+
     # Store metadata for reporting
     benchmark.extra_info["format"] = "safetensors"
     benchmark.extra_info["rows"] = n_rows
@@ -103,22 +99,19 @@ def test_parquet_write_speed(benchmark, spark, tmp_path: Path, n_rows: int):
     """Benchmark Parquet write performance for baseline comparison."""
     # Generate same test data as safetensors test
     data = _generate_tensor_data(n_rows, 1)
-    
+
     # Create DataFrame with binary column (comparable to safetensors)
-    rows = [
-        {f"tensor_0": data["tensor_0"][i].tobytes()}
-        for i in range(n_rows)
-    ]
+    rows = [{"tensor_0": data["tensor_0"][i].tobytes()} for i in range(n_rows)]
     df = spark.createDataFrame(rows)
-    
+
     output_path = tmp_path / "parquet_output"
-    
+
     def write_parquet():
         df.write.format("parquet").mode("overwrite").save(str(output_path))
         return _get_total_size(output_path)
-    
+
     result = benchmark(write_parquet)
-    
+
     benchmark.extra_info["format"] = "parquet"
     benchmark.extra_info["rows"] = n_rows
     benchmark.extra_info["file_size_bytes"] = result
@@ -128,6 +121,7 @@ def test_parquet_write_speed(benchmark, spark, tmp_path: Path, n_rows: int):
 # -----------------------------------------------------------------------------
 # Benchmark 4.3: Multi-column benchmark
 # -----------------------------------------------------------------------------
+
 
 @pytest.mark.skipif(not _RUN_BENCHMARKS, reason=_SKIP_REASON)
 @pytest.mark.benchmark(
@@ -141,27 +135,24 @@ def test_safetensors_multi_column_write(benchmark, spark, tmp_path: Path, n_cols
     """Benchmark safetensors write with varying column counts."""
     n_rows = 10000  # Fixed row count, varying columns
     data = _generate_tensor_data(n_rows, n_cols)
-    
+
     # Create DataFrame with multiple columns
     rows = [
-        {
-            f"tensor_{i}": data[f"tensor_{i}"][row_idx].tobytes()
-            for i in range(n_cols)
-        }
+        {f"tensor_{i}": data[f"tensor_{i}"][row_idx].tobytes() for i in range(n_cols)}
         for row_idx in range(n_rows)
     ]
     df = spark.createDataFrame(rows)
-    
+
     output_path = tmp_path / f"safetensors_{n_cols}cols"
-    
+
     def write_multi_col():
         df.write.format("safetensors").format("safetensors").option(
             "batch_size", "500"
         ).mode("overwrite").save(str(output_path))
         return _get_total_size(output_path)
-    
+
     result = benchmark(write_multi_col)
-    
+
     benchmark.extra_info["format"] = "safetensors"
     benchmark.extra_info["columns"] = n_cols
     benchmark.extra_info["rows"] = n_rows
@@ -180,25 +171,22 @@ def test_parquet_multi_column_write(benchmark, spark, tmp_path: Path, n_cols: in
     """Benchmark Parquet write with varying column counts for comparison."""
     n_rows = 10000  # Fixed row count, varying columns
     data = _generate_tensor_data(n_rows, n_cols)
-    
+
     # Create DataFrame with multiple columns
     rows = [
-        {
-            f"tensor_{i}": data[f"tensor_{i}"][row_idx].tobytes()
-            for i in range(n_cols)
-        }
+        {f"tensor_{i}": data[f"tensor_{i}"][row_idx].tobytes() for i in range(n_cols)}
         for row_idx in range(n_rows)
     ]
     df = spark.createDataFrame(rows)
-    
+
     output_path = tmp_path / f"parquet_{n_cols}cols"
-    
+
     def write_multi_col():
         df.write.format("parquet").mode("overwrite").save(str(output_path))
         return _get_total_size(output_path)
-    
+
     result = benchmark(write_multi_col)
-    
+
     benchmark.extra_info["format"] = "parquet"
     benchmark.extra_info["columns"] = n_cols
     benchmark.extra_info["rows"] = n_rows
@@ -209,50 +197,48 @@ def test_parquet_multi_column_write(benchmark, spark, tmp_path: Path, n_cols: in
 # Benchmark 4.4 & 4.5: File size comparison
 # -----------------------------------------------------------------------------
 
+
 @pytest.mark.skipif(not _RUN_BENCHMARKS, reason=_SKIP_REASON)
 def test_file_size_comparison(spark, tmp_path: Path):
     """Compare file sizes between safetensors and Parquet for identical data."""
     n_rows = 100000
     n_cols = 5
-    
+
     data = _generate_tensor_data(n_rows, n_cols)
-    
+
     # Create DataFrame
     rows = [
-        {
-            f"tensor_{i}": data[f"tensor_{i}"][row_idx].tobytes()
-            for i in range(n_cols)
-        }
+        {f"tensor_{i}": data[f"tensor_{i}"][row_idx].tobytes() for i in range(n_cols)}
         for row_idx in range(n_rows)
     ]
     df = spark.createDataFrame(rows)
-    
+
     # Write safetensors
     st_path = tmp_path / "size_test_safetensors"
-    df.write.format("safetensors").option(
-            "batch_size", "500"
-    ).mode("overwrite").save(str(st_path))
+    df.write.format("safetensors").option("batch_size", "500").mode("overwrite").save(
+        str(st_path)
+    )
     st_size = _get_total_size(st_path)
-    
+
     # Write Parquet
     pq_path = tmp_path / "size_test_parquet"
     df.write.format("parquet").mode("overwrite").save(str(pq_path))
     pq_size = _get_total_size(pq_path)
-    
+
     # Calculate compression ratios
     raw_size = n_rows * n_cols * 128 * 4  # 128 floats per tensor, 4 bytes each
-    
-    print(f"\n{'='*60}")
+
+    print(f"\n{'=' * 60}")
     print(f"File Size Comparison ({n_rows} rows, {n_cols} columns)")
-    print(f"{'='*60}")
-    print(f"Raw data size:        {raw_size:,} bytes ({raw_size/1024/1024:.2f} MB)")
-    print(f"Safetensors size:     {st_size:,} bytes ({st_size/1024/1024:.2f} MB)")
-    print(f"Parquet size:         {pq_size:,} bytes ({pq_size/1024/1024:.2f} MB)")
-    print(f"Safetensors ratio:    {st_size/raw_size:.2%}")
-    print(f"Parquet ratio:        {pq_size/raw_size:.2%}")
-    print(f"Parquet advantage:    {(st_size - pq_size)/st_size:.1%} smaller")
-    print(f"{'='*60}\n")
-    
+    print(f"{'=' * 60}")
+    print(f"Raw data size:        {raw_size:,} bytes ({raw_size / 1024 / 1024:.2f} MB)")
+    print(f"Safetensors size:     {st_size:,} bytes ({st_size / 1024 / 1024:.2f} MB)")
+    print(f"Parquet size:         {pq_size:,} bytes ({pq_size / 1024 / 1024:.2f} MB)")
+    print(f"Safetensors ratio:    {st_size / raw_size:.2%}")
+    print(f"Parquet ratio:        {pq_size / raw_size:.2%}")
+    print(f"Parquet advantage:    {(st_size - pq_size) / st_size:.1%} smaller")
+    print(f"{'=' * 60}\n")
+
     # Store results for potential report generation
     comparison = {
         "n_rows": n_rows,
@@ -264,7 +250,7 @@ def test_file_size_comparison(spark, tmp_path: Path):
         "parquet_compression_ratio": pq_size / raw_size,
         "parquet_advantage_pct": (st_size - pq_size) / st_size * 100,
     }
-    
+
     # Save to file for report generation
     report_path = tmp_path / "size_comparison.json"
     report_path.write_text(json.dumps(comparison, indent=2))
@@ -274,7 +260,10 @@ def test_file_size_comparison(spark, tmp_path: Path):
 # Report Generation Helper
 # -----------------------------------------------------------------------------
 
-def pytest_benchmark_generate_json(config, benchmarks, include, machine_info, commit_info):
+
+def pytest_benchmark_generate_json(
+    config, benchmarks, include, machine_info, commit_info
+):
     """Generate enhanced JSON report with all benchmark data."""
     results = []
     for bench in benchmarks:
@@ -300,11 +289,11 @@ def pytest_benchmark_generate_json(config, benchmarks, include, machine_info, co
 def generate_performance_report(request, tmp_path_factory):
     """Generate performance report after all benchmarks complete."""
     yield
-    
+
     # This runs after all tests complete
     if hasattr(request.config, "_benchmark_results"):
         results = request.config._benchmark_results
-        
+
         # Create human-readable report
         report_lines = [
             "# Safetensors vs Parquet Performance Report\n",
@@ -312,7 +301,7 @@ def generate_performance_report(request, tmp_path_factory):
             "| Format | Rows | Mean Time (s) | Throughput (rows/sec) | File Size (MB) |\n",
             "|--------|------|---------------|------------------------|----------------|\n",
         ]
-        
+
         for bench in results:
             if bench.group == "write_comparison":
                 format_name = bench.extra_info.get("format", "unknown")
@@ -320,26 +309,26 @@ def generate_performance_report(request, tmp_path_factory):
                 mean_time = bench.stats.mean
                 throughput = bench.extra_info.get("throughput_rows_per_sec", 0)
                 file_size_mb = bench.extra_info.get("file_size_bytes", 0) / 1024 / 1024
-                
+
                 report_lines.append(
                     f"| {format_name} | {n_rows:,} | {mean_time:.4f} | {throughput:,.0f} | {file_size_mb:.2f} |\n"
                 )
-        
+
         report_lines.append("\n## Multi-Column Performance\n")
         report_lines.append("| Format | Columns | Mean Time (s) | File Size (MB) |\n")
         report_lines.append("|--------|---------|---------------|----------------|\n")
-        
+
         for bench in results:
             if bench.group == "multi_column":
                 format_name = bench.extra_info.get("format", "unknown")
                 n_cols = bench.extra_info.get("columns", 0)
                 mean_time = bench.stats.mean
                 file_size_mb = bench.extra_info.get("file_size_bytes", 0) / 1024 / 1024
-                
+
                 report_lines.append(
                     f"| {format_name} | {n_cols} | {mean_time:.4f} | {file_size_mb:.2f} |\n"
                 )
-        
+
         # Write report
         report_path = Path(request.config.rootdir) / "benchmark_report.md"
         report_path.write_text("".join(report_lines))
