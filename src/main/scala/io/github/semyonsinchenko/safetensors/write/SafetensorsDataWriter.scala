@@ -202,9 +202,8 @@ class SafetensorsDataWriter(
     // Pass 1: compute byte lengths per column (no encoding) to build descriptors
     val descriptors: Seq[TensorDescriptor] = columnMeta.map {
       case (colName, colIdx, colType, dtype, perSampleShape) =>
-        val totalBytes = batchBuffer.map(row =>
-          computeTensorByteLength(row, colIdx, colType, dtype)
-        ).sum
+        val totalBytes =
+          batchBuffer.map(row => computeTensorByteLength(row, colIdx, colType, dtype)).sum
         TensorDescriptor(colName, dtype, Seq(batchSize) ++ perSampleShape, totalBytes)
     }
 
@@ -243,9 +242,9 @@ class SafetensorsDataWriter(
       descriptors.foreach { desc =>
         indexEntries += TensorIndexEntry(
           tensorKey = desc.name,
-          fileName  = fileName,
-          shape     = desc.shape,
-          dtype     = desc.dtype.name
+          fileName = fileName,
+          shape = desc.shape,
+          dtype = desc.dtype.name
         )
       }
 
@@ -256,7 +255,8 @@ class SafetensorsDataWriter(
       shards += ShardInfo(shardPath = fileName, samplesCount = batchSize, bytes = totalBytes)
     } catch {
       case e: Exception =>
-        try stream.close() catch { case _: Exception => () }
+        try stream.close()
+        catch { case _: Exception => () }
         throw e
     }
 
