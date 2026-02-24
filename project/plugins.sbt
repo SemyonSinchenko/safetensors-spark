@@ -6,3 +6,6 @@ addSbtPlugin("org.scalameta" % "sbt-scalafmt" % "2.5.6")
 
 // sbt-ci-release — automates Sonatype / Maven Central releases from CI
 addSbtPlugin("com.github.sbt" % "sbt-ci-release" % "1.11.2")
+
+// sbt-jmh — JMH benchmarking framework
+addSbtPlugin("pl.project13.scala" % "sbt-jmh" % "0.4.7")

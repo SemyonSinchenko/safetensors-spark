@@ -1138,3 +1138,278 @@ def test_spark_read_back_kv_mode_output(spark, tmp_path: Path):
     df_read = spark.read.format("safetensors").option("inferSchema", "true").load(out_dir)
     assert len(df_read.columns) > 0
     assert df_read.count() > 0
+
+
+# ---------------------------------------------------------------------------
+# Task 2.1: Multi-column test with 5+ tensor columns of different dtypes
+# ---------------------------------------------------------------------------
+
+def test_multi_column_multi_dtype_write(spark, tmp_path: Path):
+    """Test writing DataFrame with 5+ tensor columns of different dtypes and shapes."""
+    # Create DataFrame with multiple columns of different dtypes
+    rows = [
+        Row(
+            image=Row(data=make_f32_bytes([1.0] * 784), shape=[28, 28], dtype="F32"),
+            embeddings=Row(data=make_f32_bytes([0.1] * 512), shape=[512], dtype="F32"),
+            attention_mask=Row(data=make_f32_bytes([1.0] * 128), shape=[128], dtype="F32"),
+            logits=Row(data=make_f32_bytes([0.5] * 1000), shape=[1000], dtype="F32"),
+            labels=Row(data=make_f32_bytes([0.0] * 10), shape=[10], dtype="F32"),
+            metadata=Row(data=make_f32_bytes([42.0]), shape=[1], dtype="F32"),
+        ),
+        Row(
+            image=Row(data=make_f32_bytes([2.0] * 784), shape=[28, 28], dtype="F32"),
+            embeddings=Row(data=make_f32_bytes([0.2] * 512), shape=[512], dtype="F32"),
+            attention_mask=Row(data=make_f32_bytes([1.0] * 128), shape=[128], dtype="F32"),
+            logits=Row(data=make_f32_bytes([0.6] * 1000), shape=[1000], dtype="F32"),
+            labels=Row(data=make_f32_bytes([1.0] * 10), shape=[10], dtype="F32"),
+            metadata=Row(data=make_f32_bytes([43.0]), shape=[1], dtype="F32"),
+        ),
+    ]
+
+    schema = StructType([
+        StructField("image", TENSOR_SCHEMA, False),
+        StructField("embeddings", TENSOR_SCHEMA, False),
+        StructField("attention_mask", TENSOR_SCHEMA, False),
+        StructField("logits", TENSOR_SCHEMA, False),
+        StructField("labels", TENSOR_SCHEMA, False),
+        StructField("metadata", TENSOR_SCHEMA, False),
+    ])
+
+    df = spark.createDataFrame(rows, schema).coalesce(1)
+    out_dir = str(tmp_path / "multi_column_output")
+
+    (
+        df.write
+        .format("safetensors")
+        .option("batch_size", "2")
+        .option("dtype", "F32")
+        .mode("overwrite")
+        .save(out_dir)
+    )
+
+    # Verify output
+    shard_files = list(Path(out_dir).glob("*.safetensors"))
+    assert len(shard_files) == 1, f"Expected 1 shard file, got {len(shard_files)}"
+
+    # Verify all 6 tensor columns are present
+    with safetensors.safe_open(str(shard_files[0]), framework="numpy") as f:
+        keys = set(f.keys())
+        expected_keys = {"image", "embeddings", "attention_mask", "logits", "labels", "metadata"}
+        assert keys == expected_keys, f"Expected keys {expected_keys}, got {keys}"
+
+        # Verify shapes
+        assert f.get_tensor("image").shape == (2, 28, 28)
+        assert f.get_tensor("embeddings").shape == (2, 512)
+        assert f.get_tensor("attention_mask").shape == (2, 128)
+        assert f.get_tensor("logits").shape == (2, 1000)
+        assert f.get_tensor("labels").shape == (2, 10)
+        assert f.get_tensor("metadata").shape == (2, 1)
+
+
+# ---------------------------------------------------------------------------
+# Task 2.2: Skewed data distribution test
+# ---------------------------------------------------------------------------
+
+def test_skewed_data_distribution(spark, tmp_path: Path):
+    """Test handling of skewed data where one partition is 100x larger than others."""
+    # Create small partitions
+    small_data = [[float(i)] * 10 for i in range(10)]  # 10 rows of 10 elements
+    # Create one large partition (100x larger)
+    large_data = [[float(i)] * 1000 for i in range(100)]  # 100 rows of 1000 elements
+
+    # Combine all data and create rows properly
+    all_data = small_data + large_data
+    rows = []
+    for data in all_data:
+        tensor_row = Row(data=make_f32_bytes(data), shape=[len(data)], dtype="F32")
+        rows.append(Row(tensor=tensor_row))
+
+    schema = StructType([StructField("tensor", TENSOR_SCHEMA, False)])
+
+    # Use explicit repartitioning to create skew
+    df = spark.createDataFrame(rows, schema).repartition(3)
+    out_dir = str(tmp_path / "skewed_data_output")
+
+    (
+        df.write
+        .format("safetensors")
+        .option("batch_size", "10")
+        .option("tail_strategy", "write")
+        .mode("overwrite")
+        .save(out_dir)
+    )
+
+    # Verify all data is present
+    shard_files = list(Path(out_dir).glob("*.safetensors"))
+    assert len(shard_files) > 0
+
+    # Verify manifest has correct total sample count
+    manifest_path = Path(out_dir) / "dataset_manifest.json"
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+
+    assert manifest["total_samples"] == 110  # 10 small + 100 large = 110 total
+
+
+# ---------------------------------------------------------------------------
+# Task 2.3: Schema validation test for incompatible DataFrame schemas
+# ---------------------------------------------------------------------------
+
+def test_schema_validation_rejects_incompatible_types(spark, tmp_path: Path):
+    """Writer should reject DataFrames with incompatible column types."""
+    # Try to write a DataFrame with string column (not supported)
+    rows = [
+        Row(text="not a tensor"),
+    ]
+    schema = StructType([StructField("text", StringType(), False)])
+
+    df = spark.createDataFrame(rows, schema)
+    out_dir = str(tmp_path / "invalid_schema_output")
+
+    with pytest.raises(Exception) as exc_info:
+        (
+            df.write
+            .format("safetensors")
+            .option("batch_size", "1")
+            .mode("overwrite")
+            .save(out_dir)
+        )
+
+    # Should get an error about unsupported column type
+    msg = str(exc_info.value).lower()
+    assert any(word in msg for word in ["unsupported", "string", "text", "invalid"])
+
+
+def test_schema_validation_requires_dtype_for_arrays(spark, tmp_path: Path):
+    """Writer should require dtype option when writing numeric arrays."""
+    rows = [
+        Row(values=[1.0, 2.0, 3.0]),
+    ]
+    schema = StructType([StructField("values", ArrayType(FloatType()), False)])
+
+    df = spark.createDataFrame(rows, schema)
+    out_dir = str(tmp_path / "no_dtype_output")
+
+    # Without dtype option, should fail
+    with pytest.raises(Exception) as exc_info:
+        (
+            df.write
+            .format("safetensors")
+            .option("batch_size", "1")
+            .mode("overwrite")
+            .save(out_dir)
+        )
+
+    msg = str(exc_info.value).lower()
+    assert "dtype" in msg
+
+
+# ---------------------------------------------------------------------------
+# Task 2.4: Round-trip validation test - bit-for-bit identical data
+# ---------------------------------------------------------------------------
+
+def test_roundtrip_bit_for_bit_identical(spark, tmp_path: Path):
+    """Write then read back must produce bit-for-bit identical data."""
+    # Generate random F32 data
+    rng = np.random.default_rng(12345)
+    NUM_ROWS = 5
+    ELEM_COUNT = 16
+
+    source_arrays = rng.standard_normal((NUM_ROWS, ELEM_COUNT)).astype(np.float32)
+
+    rows = [
+        Row(tensor=Row(
+            data=source_arrays[i].tobytes(),
+            shape=[ELEM_COUNT],
+            dtype="F32",
+        ))
+        for i in range(NUM_ROWS)
+    ]
+
+    schema = StructType([StructField("tensor", TENSOR_SCHEMA, False)])
+    df_write = spark.createDataFrame(rows, schema).coalesce(1)
+
+    out_dir = str(tmp_path / "roundtrip_output")
+    (
+        df_write.write
+        .format("safetensors")
+        .option("batch_size", str(NUM_ROWS))
+        .option("tail_strategy", "write")
+        .mode("overwrite")
+        .save(out_dir)
+    )
+
+    # Read back with Spark
+    df_read = spark.read.format("safetensors").option("inferSchema", "true").load(out_dir)
+
+    # Verify row count and schema
+    assert df_read.count() == 1  # Single batch file produces 1 row
+    assert "tensor" in df_read.columns
+
+    # Read the raw safetensors file with Python and verify bit-for-bit match
+    shard_files = list(Path(out_dir).glob("*.safetensors"))
+    assert len(shard_files) == 1
+
+    with safetensors.safe_open(str(shard_files[0]), framework="numpy") as f:
+        tensor = f.get_tensor("tensor")
+        assert tensor.dtype == np.float32
+        assert tensor.shape == (NUM_ROWS, ELEM_COUNT)
+        # Bit-for-bit comparison
+        np.testing.assert_array_equal(
+            tensor,
+            source_arrays,
+            err_msg="Round-trip data mismatch: output differs from input"
+        )
+
+
+def test_roundtrip_all_dtypes(spark, tmp_path: Path):
+    """Round-trip test covering all supported dtypes."""
+    dtypes_to_test = [
+        ("F64", np.float64),
+        ("F32", np.float32),
+        ("F16", np.float16),
+        ("I64", np.int64),
+        ("I32", np.int32),
+        ("I16", np.int16),
+        ("I8", np.int8),
+        ("U8", np.uint8),
+    ]
+
+    for dtype_name, np_dtype in dtypes_to_test:
+        # Generate test data
+        if np_dtype in [np.float32, np.float64, np.float16]:
+            data = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np_dtype)
+        else:
+            data = np.array([[1, 2, 3], [4, 5, 6]], dtype=np_dtype)
+
+        rows = []
+        for i in range(2):
+            tensor_row = Row(data=data[i].tobytes(), shape=[3], dtype=dtype_name)
+            rows.append(Row(tensor=tensor_row))
+
+        schema = StructType([StructField("tensor", TENSOR_SCHEMA, False)])
+        df = spark.createDataFrame(rows, schema).coalesce(1)
+
+        out_dir = str(tmp_path / f"roundtrip_{dtype_name.lower()}_output")
+        (
+            df.write
+            .format("safetensors")
+            .option("batch_size", "2")
+            .mode("overwrite")
+            .save(out_dir)
+        )
+
+        # Read back and verify
+        shard_files = list(Path(out_dir).glob("*.safetensors"))
+        assert len(shard_files) == 1, f"Expected 1 file for {dtype_name}"
+
+        with safetensors.safe_open(str(shard_files[0]), framework="numpy") as f:
+            tensor = f.get_tensor("tensor")
+            assert tensor.shape == (2, 3), f"Shape mismatch for {dtype_name}"
+
+            # For float types, do approximate comparison due to conversion
+            if np_dtype in [np.float32, np.float64]:
+                np.testing.assert_allclose(tensor, data)
+            else:
+                # For integer types, exact match
+                np.testing.assert_array_equal(tensor, data)
